@@ -1,0 +1,69 @@
+// See https://go.microsoft.com/fwlink/?LinkId=733558
+// for the documentation about the tasks.json format
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build - gdb debug",
+            "command": "nimble",
+            "args": ["debugGdb"],
+            "options": { "cwd": "${workspaceRoot}" },
+            "type": "shell",
+            "group": {
+                "kind": "build",
+                "isDefault": true,
+            },
+            "problemMatcher": [
+                {
+                    "owner": "nim",
+                    "fileLocation": "absolute",
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "(?!^(\\.+|Hint|\\s+$))(.*)\\((\\d+),\\s(\\d+)\\)\\s+((Error|Warning|Hint):\\s(.*)|(template/generic instantiation from here.*))(\\s\\[.*\\])?",
+                        "file": 2,
+                        "line": 3,
+                        "column": 4,
+                        "severity": 6,
+                        "message": 7
+                    }
+                }
+            ]
+        },
+        {
+            "label": "build file - gdb debug",
+            "command": "nim",
+            "args": [
+                "c",
+                "--debuger:native",
+                "--outDir:out/${relativeFileDirname}",
+                "-o:${fileBasenameNoExtension}"
+            ],
+            "options": { "cwd": "${workspaceRoot}" },
+            "type": "shell",
+            "group": "build",
+            "problemMatcher": [
+                {
+                    "owner": "nim",
+                    "fileLocation": "absolute",
+                    "severity": "error",
+                    "pattern": {
+                        "regexp": "(?!^(\\.+|Hint|\\s+$))(.*)\\((\\d+),\\s(\\d+)\\)\\s+((Error|Warning|Hint):\\s(.*)|(template/generic instantiation from here.*))(\\s\\[.*\\])?",
+                        "file": 2,
+                        "line": 3,
+                        "column": 4,
+                        "severity": 6,
+                        "message": 7
+                    }
+                }
+            ]
+        },
+        {
+            "label": "test",
+            "command": "nimble",
+            "args": ["test"],
+            "options": { "cwd": "${workspaceRoot" },
+            "type": "shell",
+            "group": "test"
+        }
+    ]
+}

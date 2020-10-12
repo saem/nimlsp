@@ -1,0 +1,41 @@
+{
+	"version": "0.2.0",
+    "configurations": [
+        {
+            "name": "LSP - gdb - Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/out/nimlsp",
+            "args": [],
+            "preLaunchTask": "build - gdb debug",
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "MIMode": "gdb",
+            "miDebuggerPath": "nim-gdb",
+            "setupCommands": [{
+                "description": "Enable pretty-printing for gdb",
+                "text": "-enable-pretty-printing",
+                "ignoreFailures": true
+            }]
+		},
+        {
+            "name": "File - gdb - Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/${relativeFileDirname}/${fileBasenameNoExtension}",
+            "args": [],
+            "preLaunchTask": "build - gdb debug",
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "MIMode": "gdb",
+            "miDebuggerPath": "nim-gdb",
+            "setupCommands": [{
+                "description": "Enable pretty-printing for gdb",
+                "text": "-enable-pretty-printing",
+                "ignoreFailures": true
+            }]
+		}
+    ]
+}

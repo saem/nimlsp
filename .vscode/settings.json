@@ -1,0 +1,6 @@
+// Place your settings in this file to overwrite default and user settings.
+{
+    "nim.runOutputDirectory": "out",
+    "nim.lintOnSave": true,
+    "nim.project": ["src/nimlsp.nim", "tests/tnimlsp.nim"]
+}
