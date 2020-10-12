@@ -4,7 +4,7 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build - gdb debug",
+            "label": "build lsp gdb",
             "command": "nimble",
             "args": ["debugGdb"],
             "options": { "cwd": "${workspaceRoot}" },
@@ -30,7 +30,7 @@
             ]
         },
         {
-            "label": "build file - gdb debug",
+            "label": "build file gdb",
             "command": "nim",
             "args": [
                 "c",
@@ -61,9 +61,33 @@
             "label": "test",
             "command": "nimble",
             "args": ["test"],
-            "options": { "cwd": "${workspaceRoot" },
+            "options": { "cwd": "${workspaceRoot}" },
             "type": "shell",
-            "group": "test"
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                {
+                    "owner": "nim",
+                    "fileLocation": "absolute",
+                    "pattern": [
+                        {
+                            "regexp": "  \\[(OK|FAILED|SKIPPED)\\] (.*)",
+                            "severity": 1,
+                            "code": 2
+                        },
+                        {
+                            "regexp": "    (.*)\\((\\d+), (\\d+)\\): (.*)",
+                            "file": 1,
+                            "line": 2,
+                            "column": 3,
+                            "message": 4,
+                            "loop": true
+                        }
+                    ]
+                }
+            ]
         }
     ]
 }

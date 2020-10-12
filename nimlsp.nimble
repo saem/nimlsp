@@ -15,20 +15,19 @@ requires "nim >= 1.0.0"
 requires "astpatternmatching"
 requires "jsonschema >= 0.2.1"
 
-# nimble test does not work for me out of the box
-#task test, "Runs the test suite":
-  #exec "nim c -r --outDir:out/tests tests/test_messages.nim"
-  #exec "nim c -d:debugLogging -d:jsonSchemaDebug --outDir:out/tests -r tests/test_messages2.nim"
-
 task debug, "Builds the language server":
   exec "nim c --threads:on -d:nimcore -d:nimsuggest -d:debugCommunication -d:debugLogging --outDir:out src/nimlsp"
 
 task debugGdb, "Builds the language server":
-  exec "nim c --threads:on --debugger:native -d:nimcore -d:nimsuggest -d:debugCommunication -d:debugLogging --outDir:out src/nimlsp"
+  exec "nim c --threads:on -d:nimcore -d:nimsuggest -d:debugCommunication -d:debugLogging --outDir:out --debugger:native src/nimlsp"
 
 before test:
   if not fileExists("out/nimlsp"):
-    exec "nimble build"
+    exec "nimble debugGdb"
+
+task test, "Runs the test suite":
+  exec "nim r --outDir:out/tests tests/tnimlsp.nim"
+  exec "nim r --outDir:out/tests -d:debugLogging -d:jsonSchemaDebug tests/test_messages2.nim"
 
 task findNim, "Tries to find the current Nim installation":
   echo NimVersion

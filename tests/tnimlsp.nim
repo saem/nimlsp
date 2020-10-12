@@ -4,7 +4,7 @@ import .. / src / nimlsppkg / baseprotocol
 include .. / src / nimlsppkg / messages
 
 let
-  nimlsp = parentDir(parentDir(currentSourcePath())) / "nimlsp"
+  nimlsp = parentDir(parentDir(currentSourcePath())) / "out" / "nimlsp"
   p = startProcess(nimlsp, options = {})
   i = p.inputStream()
   o = p.outputStream()
