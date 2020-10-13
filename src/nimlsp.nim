@@ -109,13 +109,44 @@ proc parseId(node: JsonNode): int =
     raise newException(MalformedFrame, "Invalid id node: " & repr(node))
 
 proc respond(request: RequestMessage, data: JsonNode) =
-  outs.sendJson create(ResponseMessage, "2.0", parseId(request["id"]), some(data), none(ResponseError)).JsonNode
+  outs.sendJson create(
+      ResponseMessage,
+      "2.0",
+      parseId(request["id"]),
+      some(data),
+      none(ResponseError)
+    ).JsonNode
 
-proc error(request: RequestMessage, errorCode: int, message: string, data: JsonNode) =
-  outs.sendJson create(ResponseMessage, "2.0", parseId(request["id"]), none(JsonNode), some(create(ResponseError, errorCode, message, data))).JsonNode
+proc error(
+    request: RequestMessage,
+    errorCode: ErrorCode,
+    message: string,
+    data: JsonNode
+  ) =
+  outs.sendJson create(
+      ResponseMessage,
+      "2.0",
+      parseId(request["id"]),
+      none(JsonNode),
+      some(create(ResponseError, cast[int](errorCode), message, data))
+    ).JsonNode
+
+proc error(errorCode: ErrorCode, message: string) =
+  outs.sendJson create(
+      ResponseMessage,
+      "2.0",
+      Nil,
+      none(JsonNode),
+      some(create(ResponseError, cast[int](errorCode), message, newJNull()))
+    ).JsonNode
 
 proc notify(notification: string, data: JsonNode) =
-  outs.sendJson create(NotificationMessage, "2.0", notification, some(data)).JsonNode
+  outs.sendJson create(
+      NotificationMessage,
+      "2.0",
+      notification,
+      some(data)
+    ).JsonNode
 
 type Certainty = enum
   None,
@@ -163,7 +194,7 @@ if paramCount() == 1:
       echo "nimlsp v", version
       quit 0
     else: nimpath = expandFilename(paramStr(1))
-if not existsFile(nimpath / "config/nim.cfg"):
+if not fileExists(nimpath / "config/nim.cfg"):
   stderr.write "Unable to find \"config/nim.cfg\" in \"" & nimpath & "\". " &
     "Supply the Nim project folder by adding it as an argument.\n"
   quit 1
@@ -177,7 +208,7 @@ while true:
     whenValid(message, RequestMessage):
       debugEcho "Got valid Request message of type " & message["method"].getStr
       if not initialized and message["method"].getStr != "initialize":
-        message.error(-32002, "Unable to accept requests before being initialized", newJNull())
+        message.error(ServerNotInitialized, "Unable to accept requests before being initialized", newJNull())
         continue
       case message["method"].getStr:
         of "shutdown":
@@ -493,8 +524,14 @@ while true:
         else:
           debugEcho "Got unknown notification message"
       continue
-  except IOError:
+    # everything else should have continued so this should be skipped
+    error(InvalidRequest, "Invalid or malformed request")
+  except IOError as e:
+    debugEcho "IOError exception: ", e.msg
     break
+  except BaseProtocolError as e:
+    debugEcho "BaseProtocol exception: ", e.msg
+    continue
   except CatchableError as e:
     debugEcho "Got exception: ", e.msg
     continue
