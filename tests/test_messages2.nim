@@ -1,6 +1,5 @@
 import unittest
 include nimlsppkg / messages
-#import packedjson
 
 let message = "Hello World"
 
