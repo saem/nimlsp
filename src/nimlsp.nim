@@ -529,9 +529,11 @@ while true:
   except IOError as e:
     debugEcho "IOError exception: ", e.msg
     break
-  except BaseProtocolError as e:
-    debugEcho "BaseProtocol exception: ", e.msg
-    continue
+  except MalformedFrame as e:
+    debugEcho "MalformedFrame exception (unrecoverable): ", e.msg
+    # Exit because a stream error like this is unrecoverable
+    # should stop listening, processing, dispose resources, and exit
+    break
   except CatchableError as e:
     debugEcho "Got exception: ", e.msg
     continue
