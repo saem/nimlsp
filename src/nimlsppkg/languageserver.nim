@@ -5,6 +5,9 @@ from baseprotocol import readFrame, sendJson, InvalidRequestId, MalformedFrame
 from strutils import join, parseInt
 from messageenums import TextDocumentSyncKind
 
+const
+  MaxNumberOfProblems = 100
+
 type
   NimPath* = string
   ServerVersion* = string
@@ -21,8 +24,16 @@ type
   OutputStream = Stream
 
   ClientCap* {.pure, size: sizeof(int).} = enum
-    capWorkspaceConfig, capWorkspaceFolder, capDiagnosticRelatedInfo
+    capWorkspaceConfig,
+      ## `workspace/configuration` requests
+    capWorkspaceFolders,
+      ## workspaces with multiple root folders
+    capDiagnosticRelatedInfo
+      ## `relatedInformation` in `Diagnostic`
   ClientCaps* = set[ClientCap]
+
+  Settings* = ref object
+    maxNumberOfProblems*: int
 
   ServerState = ref object
     lspState*: LspState
@@ -32,8 +43,9 @@ type
     sendToClient*: InputStream
     initParams*: InitializeParams
     rawClientCapabilities*: ClientCapabilities
-    capabilities*: ServerCapabilities
+    rawServerCaps*: ServerCapabilities
     clientCaps*: ClientCaps
+    settings*: Settings
 
   LanguageServer* = object
     startParams*: ServerStartParams
@@ -44,7 +56,12 @@ template debugEcho*(args: varargs[string, `$`]) =
     stderr.write(join args)
     stderr.write("\n")
 
-proc serverCapabilities*(): ServerCapabilities =
+proc defaultSettings(): Settings =
+  result = Settings(
+    maxNumberOfProblems: 100
+  )
+
+proc serverCapabilities(): ServerCapabilities =
   result = create(ServerCapabilities,
     textDocumentSync = some(create(TextDocumentSyncOptions,
       openClose = some(true),
@@ -101,7 +118,8 @@ proc initServer*(
       sendToClient: cis,
       gotShutdownMsg: false,
       clientCaps: {},
-      capabilities: serverCapabilities()
+      rawServerCaps: serverCapabilities(),
+      settings: defaultSettings()
     )
   )
 
@@ -211,7 +229,7 @@ proc processInputUninitialized(server: LanguageServer, message: JsonNode) =
             if ws["configuration"].get(newJBool(false)).getBool(false):
               incl(server.state.clientCaps, capWorkspaceConfig)
             if ws["workspaceFolders"].get(newJBool(false)).getBool(false):
-              incl(server.state.clientCaps, capWorkspaceFolder)
+              incl(server.state.clientCaps, capWorkspaceFolders)
           if caps["textDocument"].isSome:
             var td = TextDocumentClientCapabilities(caps["textDocument"].unsafeGet)
             if td["publishDiagnostics"].isSome:
@@ -219,25 +237,25 @@ proc processInputUninitialized(server: LanguageServer, message: JsonNode) =
               if pd["relatedInformation"].get(newJBool(false)).getBool(false):
                 incl(server.state.clientCaps, capDiagnosticRelatedInfo)
 
-          debugEcho "Client capabilities " & $server.state.clientCaps
-          if capWorkspaceFolder in server.state.clientCaps:
-            server.state.capabilities.JsonNode["workspace"] = 
-              create(WorkspaceCapability,
-                workspaceFolders = some(create(WorkspaceFoldersServerCapabilities,
-                  supported = some(true),
-                  changeNotifications = some(true)
-                ))
-              ).JsonNode
-          # Negotiate Capabilities - end
+        debugEcho "Client capabilities " & $server.state.clientCaps
+        if capWorkspaceFolders in server.state.clientCaps:
+          server.state.rawServerCaps.JsonNode["workspace"] = 
+            create(WorkspaceCapability,
+              workspaceFolders = some(create(WorkspaceFoldersServerCapabilities,
+                supported = some(true),
+                changeNotifications = some(true)
+              ))
+            ).JsonNode
+        # Negotiate Capabilities - end
 
-          server.state.lspState = initializing
+        server.state.lspState = initializing
 
-          debugEcho "Initializing server, awaiting 'initialized' notification"
-          server.respond(
-            message,
-            create(InitializeResult, server.state.capabilities).JsonNode
-          )
-          return
+        debugEcho "Initializing server, awaiting 'initialized' notification"
+        server.respond(
+          message,
+          create(InitializeResult, server.state.rawServerCaps).JsonNode
+        )
+        return
 
       server.error(
         message,
@@ -281,6 +299,20 @@ proc processInputInitialized(server: LanguageServer, message: JsonNode) =
   ## only call this method if the server's lspState is initialized
 
   debugEcho("Got message: " & repr(message))
+
+  whenValid(message, NotificationMessage):
+    case message["method"].getStr
+    of "DidChangeConfigurationParams":
+      var params = message["params"].get(newJNull())
+      whenValid(params, DidChangeConfigurationParams):
+        var settings = params["settings"]{"nim"}
+
+        debugEcho "Got settings: " & repr(settings)
+
+        server.state.settings.maxNumberOfProblems = 
+          settings{"maxNumberOfProblems"}.getInt(MaxNumberOfProblems)
+    return
+
   server.respond(try: parseId(message["id"]) except: -1, message)
 
 proc process(server: LanguageServer): bool = 

@@ -60,19 +60,17 @@ suite "Nim Language Server Core Tests":
 
     var frame = readFrame()
     var message = frame.parseJson
-    if message.isValid(ResponseMessage):
-      var data = ResponseMessage(message)
-      check data["error"].isSome
-      var error = data["error"].get
-      check error.isValid(ResponseError, allowExtra = true)
-      var errResp = ResponseError(error)
-      checkpoint "Got an error response"
-      check data["id"].getInt == id
-      checkpoint "Refers to the correct id"
-      check errResp["code"].getInt == cast[int](ServerNotInitialized)
-      checkpoint "Has the correct error code"
-    else:
-      check false
+    check message.isValid(ResponseMessage)
+    var data = ResponseMessage(message)
+    check data["error"].isSome
+    var error = data["error"].get
+    check error.isValid(ResponseError, allowExtra = true)
+    var errResp = ResponseError(error)
+    checkpoint "Got an error response"
+    check data["id"].getInt == id
+    checkpoint "Refers to the correct id"
+    check errResp["code"].getInt == cast[int](ServerNotInitialized)
+    checkpoint "Has the correct error code"
 
     echo message
   
@@ -116,12 +114,10 @@ suite "Nim Language Server Core Tests":
 
     var frame = readFrame()
     var message = frame.parseJson
-    if message.isValid(ResponseMessage):
-      var data = ResponseMessage(message)
-      check data["id"].getInt == id
-    else:
-      check false
-    
+    check message.isValid(ResponseMessage)
+    var data = ResponseMessage(message)
+    check data["id"].getInt == id
+
     echo message
   
   test "Initialized without workspace":
@@ -147,13 +143,13 @@ suite "Nim Language Server Core Tests":
 
     var frame = readFrame()
     var message = frame.parseJson
-    if message.isValid(ResponseMessage):
-      var data = ResponseMessage(message)
-      checkpoint "Retrieved ResponseMesage"
-      if message["result"].isValid(InitializeResult):
-        var initRes = InitializeResult(message["result"])
-        checkpoint "Retrieved InitializeResult"
-        if initRes["capabilities"].isValid(ServerCapabilities):
-          var serverCaps = ServerCapabilities(initRes["capabilities"])
-          checkpoint "Retrieved ServerCapabilities"
-          check serverCaps["workspace"].isNone
+    check message.isValid(ResponseMessage)
+    var data = ResponseMessage(message)
+    checkpoint "Retrieved ResponseMesage"
+    check message["result"].isValid(InitializeResult)
+    var initRes = InitializeResult(message["result"])
+    checkpoint "Retrieved InitializeResult"
+    check initRes["capabilities"].isValid(ServerCapabilities)
+    var serverCaps = ServerCapabilities(initRes["capabilities"])
+    checkpoint "Retrieved ServerCapabilities"
+    check serverCaps["workspace"].isNone
