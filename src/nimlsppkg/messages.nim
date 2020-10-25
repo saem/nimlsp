@@ -100,9 +100,14 @@ jsonSchema:
   MarkupContent:
     kind: string # "plaintext" or "markdown"
     value: string
+  
+  ClientInfo:
+    name: string
+    version?: string
 
   InitializeParams:
     processId: int or float or nil
+    clientInfo?: ClientInfo
     rootPath?: string or nil
     rootUri: string or nil # String is DocumentUri
     initializationOptions?: any
@@ -214,8 +219,13 @@ jsonSchema:
   RenameCapability:
     dynamicRegistration?: bool
 
-  PublishDiagnosticsCapability:
-    dynamicRegistration?: bool
+  DiagnosticsTagSupport:
+    valueSet: int[] #DiagnosticTag
+
+  PublishDiagnosticsClientCapabilities:
+    relatedInformation?: bool
+    tagSupport?: DiagnosticsTagSupport
+    versionSupport?: bool
 
   TextDocumentClientCapabilities:
     synchronization?: SynchronizationCapability
@@ -236,7 +246,7 @@ jsonSchema:
     documentLink?: DocumentLinkCapability
     colorProvider?: ColorProviderCapability
     rename?: RenameCapability
-    publishDiagnostics?: PublishDiagnosticsCapability
+    publishDiagnostics?: PublishDiagnosticsClientCapabilities
 
   ClientCapabilities:
     workspace?: WorkspaceClientCapabilities
@@ -254,11 +264,13 @@ jsonSchema:
     retry: bool
 
   CompletionOptions:
-    resolveProvider?: bool
     triggerCharacters?: string[]
+    allCommitCharacters?: string[]
+    resolveProvider?: bool
 
   SignatureHelpOptions:
     triggerCharacters?: string[]
+    retriggerCharacters?: string[]
 
   CodeLensOptions:
     resolveProvider?: bool
@@ -289,12 +301,12 @@ jsonSchema:
   StaticRegistrationOptions:
     id?: string
 
-  WorkspaceFolderCapability:
+  WorkspaceFoldersServerCapabilities:
     supported?: bool
     changeNotifications?: string or bool
 
   WorkspaceCapability:
-    workspaceFolders?: WorkspaceFolderCapability
+    workspaceFolders?: WorkspaceFoldersServerCapabilities
 
   TextDocumentRegistrationOptions:
     documentSelector: DocumentFilter[] or nil
@@ -304,25 +316,28 @@ jsonSchema:
 
   ServerCapabilities:
     textDocumentSync?: TextDocumentSyncOptions or int or float
-    hoverProvider?: bool
     completionProvider?: CompletionOptions
+    hoverProvider?: bool #or HoverOptions
     signatureHelpProvider?: SignatureHelpOptions
+    declarationProvider?: bool #or DeclarationOptions or DeclarationRegistrationOptions
     definitionProvider?: bool
     typeDefinitionProvider?: bool or TextDocumentAndStaticRegistrationOptions
     implementationProvider?: bool or TextDocumentAndStaticRegistrationOptions
     referencesProvider?: bool
     documentHighlightProvider?: bool
     documentSymbolProvider?: bool
-    workspaceSymbolProvider?: bool
     codeActionProvider?: bool
     codeLensProvider?: CodeLensOptions
+    documentLinkProvider?: DocumentLinkOptions
+    colorProvider?: bool or ColorProviderOptions or TextDocumentAndStaticRegistrationOptions
     documentFormattingProvider?: bool
     documentRangeFormattingProvider?: bool
     documentOnTypeFormattingProvider?: DocumentOnTypeFormattingOptions
     renameProvider?: bool
-    documentLinkProvider?: DocumentLinkOptions
-    colorProvider?: bool or ColorProviderOptions or TextDocumentAndStaticRegistrationOptions
+    foldingRangeProvider?: bool #or FoldingRangeOptions or FoldingRangeRegistrationOptions
     executeCommandProvider?: ExecuteCommandOptions
+    selectionRangeProvider?: bool #or SelectionRangeOptions or SelectionRangeRegistrationOptions
+    workspaceSymbolProvider?: bool
     workspace?: WorkspaceCapability
     experimental?: any
 
@@ -494,7 +509,7 @@ jsonSchema:
   ParameterInformation:
     label: string
     documentation?: string or MarkupContent
-
+  
   SignatureHelpRegistrationOptions extends TextDocumentRegistrationOptions:
     triggerCharacters?: string[]
 

@@ -5,6 +5,8 @@ type
 
   MalformedFrame* = object of BaseProtocolError
   UnsupportedEncoding* = object of BaseProtocolError
+  InvalidRequestId* = object of BaseProtocolError
+    id*: JsonNode
 
 proc skipWhitespace(x: string, pos: int): int =
   result = pos
@@ -62,4 +64,3 @@ proc readFrame*(s: Stream): TaintedString =
           return s.readStr(contentLen)
       else:
         raise newException(MalformedFrame, "missing Content-Length header")
-

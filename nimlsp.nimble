@@ -16,18 +16,22 @@ requires "astpatternmatching"
 requires "jsonschema >= 0.2.1"
 
 task debug, "Builds the language server":
+  exec "nim c --threads:on -d:nimcore -d:nimsuggest -d:debugCommunication -d:debugLogging -d:newLanguageServer --out:out/nimlanguageserver src/nimlsp"
   exec "nim c --threads:on -d:nimcore -d:nimsuggest -d:debugCommunication -d:debugLogging --outDir:out src/nimlsp"
 
 task debugGdb, "Builds the language server":
+  exec "nim c --threads:on -d:nimcore -d:nimsuggest -d:debugCommunication -d:debugLogging -d:newLanguageServer --out:out/nimlanguageserver --debugger:native src/nimlsp"
   exec "nim c --threads:on -d:nimcore -d:nimsuggest -d:debugCommunication -d:debugLogging --outDir:out --debugger:native src/nimlsp"
 
 before test:
-  if not fileExists("out/nimlsp"):
+  if not fileExists("out/nimlsp") or not fileExists("out/nimlanguageserver"):
     exec "nimble debugGdb"
 
 task test, "Runs the test suite":
-  exec "nim r --outDir:out/tests tests/tnimlsp.nim"
-  exec "nim r --outDir:out/tests -d:debugLogging -d:jsonSchemaDebug tests/test_messages2.nim"
+  exec "nim r --outDir:out/tests tests/tlanguageserver.nim"
+  # exec "nim r --outDir:out/tests tests/tnimlsp.nim"
+  # exec "nim r --outDir:out/tests tests/tnimlanguageserver.nim"
+  # exec "nim r --outDir:out/tests -d:debugLogging -d:jsonSchemaDebug tests/test_messages2.nim"
 
 task findNim, "Tries to find the current Nim installation":
   echo NimVersion

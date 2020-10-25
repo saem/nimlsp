@@ -14,6 +14,7 @@ suite "Nim LSP basic operation":
     var ir = create(RequestMessage, "2.0", 0, "initialize", some(
       create(InitializeParams,
         processId = getCurrentProcessId(),
+        clientInfo = none(ClientInfo),
         rootPath = none(string),
         rootUri = "file:///tmp/",
         initializationOptions = none(JsonNode),

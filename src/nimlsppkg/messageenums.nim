@@ -16,6 +16,9 @@ type
     Warning = 2,
     Information = 3,
     Hint = 4
+  DiagnosticTag* {.pure.} = enum
+    Unnecessary = 1,
+    Deprecated = 2
   SymbolKind* {.pure.} = enum
     File = 1,
     Module = 2,
