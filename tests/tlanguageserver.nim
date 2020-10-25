@@ -8,19 +8,14 @@ from .. / src / nimlsppkg / baseprotocol import nil
 include .. / src / nimlsppkg / messages
 
 let
-  i = newStringStream("")
-  o = newStringStream("")
   nimpath = "/foo/bar/nim"
   version = "0.0.1"
-  ls = initServer(nimpath, version, o, i)
   clientPid = 37
 
 var
-  id = 0
-  iwp = i.getPosition
-  irp = i.getPosition
-  owp = o.getPosition
-  orp = o.getPosition
+  i, o: Stream
+  ls: LanguageServer
+  id, iwp, irp, owp, orp: int
 
 proc sendFrame(data: string) =
     irp = i.getPosition
@@ -47,6 +42,14 @@ proc nextId(): int =
 
 suite "Nim Language Server Core Tests":
   setup:
+    i = newStringStream("")
+    o = newStringStream("")
+    ls = initServer(nimpath, version, o, i)
+    id = 0
+    iwp = i.getPosition
+    irp = i.getPosition
+    owp = o.getPosition
+    orp = o.getPosition
     inc id
 
   test "Needs to be initialized or will error on any other requests":
@@ -90,7 +93,16 @@ suite "Nim Language Server Core Tests":
         rootUri = "file:///tmp/",
         initializationOptions = none(JsonNode),
         capabilities = create(ClientCapabilities,
-          workspace = none(WorkspaceClientCapabilities),
+          workspace = some(create(WorkspaceClientCapabilities,
+            applyEdit = none(bool),
+            workspaceEdit = none(WorkspaceEditCapability),
+            didChangeConfiguration = none(DidChangeConfigurationCapability),
+            didChangeWatchedFiles = none(DidChangeWatchedFilesCapability),
+            symbol = none(SymbolCapability),
+            executeCommand = none(ExecuteCommandCapability),
+            configuration = some(true),
+            workspaceFolders = some(true)
+          )),
           textDocument = none(TextDocumentClientCapabilities),
           experimental = none(JsonNode)
         ),
@@ -107,8 +119,41 @@ suite "Nim Language Server Core Tests":
     if message.isValid(ResponseMessage):
       var data = ResponseMessage(message)
       check data["id"].getInt == id
-      echo data["result"]
     else:
       check false
     
     echo message
+  
+  test "Initialized without workspace":
+    let ir = create(RequestMessage, "2.0", id, "initialize", some(
+      create(InitializeParams,
+        processId = clientPid,
+        clientInfo = none(ClientInfo),
+        rootPath = none(string),
+        rootUri = "file:///tmp/",
+        initializationOptions = none(JsonNode),
+        capabilities = create(ClientCapabilities,
+          workspace = none(WorkspaceClientCapabilities),
+          textDocument = none(TextDocumentClientCapabilities),
+          experimental = none(JsonNode)
+        ),
+        trace = none(string),
+        workspaceFolders = none(seq[WorkspaceFolder])
+      ).JsonNode)
+    ).JsonNode
+    sendJson ir
+
+    check ls.process
+
+    var frame = readFrame()
+    var message = frame.parseJson
+    if message.isValid(ResponseMessage):
+      var data = ResponseMessage(message)
+      checkpoint "Retrieved ResponseMesage"
+      if message["result"].isValid(InitializeResult):
+        var initRes = InitializeResult(message["result"])
+        checkpoint "Retrieved InitializeResult"
+        if initRes["capabilities"].isValid(ServerCapabilities):
+          var serverCaps = ServerCapabilities(initRes["capabilities"])
+          checkpoint "Retrieved ServerCapabilities"
+          check serverCaps["workspace"].isNone

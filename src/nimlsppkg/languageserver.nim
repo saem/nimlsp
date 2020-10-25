@@ -32,14 +32,20 @@ type
     sendToClient*: InputStream
     initParams*: InitializeParams
     rawClientCapabilities*: ClientCapabilities
+    capabilities*: ServerCapabilities
     clientCaps*: ClientCaps
 
   LanguageServer* = object
     startParams*: ServerStartParams
     state: ServerState
 
-let
-  serverCapabilities* = create(ServerCapabilities,
+template debugEcho*(args: varargs[string, `$`]) =
+  when defined(debugLogging):
+    stderr.write(join args)
+    stderr.write("\n")
+
+proc serverCapabilities*(): ServerCapabilities =
+  result = create(ServerCapabilities,
     textDocumentSync = some(create(TextDocumentSyncOptions,
       openClose = some(true),
       change = some(TextDocumentSyncKind.Full.int),
@@ -80,11 +86,6 @@ let
     experimental = none(JsonNode)
   )
 
-template debugEcho*(args: varargs[string, `$`]) =
-  when defined(debugLogging):
-    stderr.write(join args)
-    stderr.write("\n")
-
 proc initServer*(
   nimpath: NimPath,
   version: ServerVersion,
@@ -99,7 +100,8 @@ proc initServer*(
       getFromClient: cos,
       sendToClient: cis,
       gotShutdownMsg: false,
-      clientCaps: {}
+      clientCaps: {},
+      capabilities: serverCapabilities()
     )
   )
 
@@ -217,8 +219,9 @@ proc processInputUninitialized(server: LanguageServer, message: JsonNode) =
               if pd["relatedInformation"].get(newJBool(false)).getBool(false):
                 incl(server.state.clientCaps, capDiagnosticRelatedInfo)
 
+          debugEcho "Client capabilities " & $server.state.clientCaps
           if capWorkspaceFolder in server.state.clientCaps:
-            cast[var JsonNode](serverCapabilities["workspace"]) = 
+            server.state.capabilities.JsonNode["workspace"] = 
               create(WorkspaceCapability,
                 workspaceFolders = some(create(WorkspaceFoldersServerCapabilities,
                   supported = some(true),
@@ -232,7 +235,7 @@ proc processInputUninitialized(server: LanguageServer, message: JsonNode) =
           debugEcho "Initializing server, awaiting 'initialized' notification"
           server.respond(
             message,
-            create(InitializeResult, serverCapabilities).JsonNode
+            create(InitializeResult, server.state.capabilities).JsonNode
           )
           return
 
