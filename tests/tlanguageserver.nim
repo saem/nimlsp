@@ -1,6 +1,6 @@
 import unittest
 import options, json, streams
-import sequtils, strutils
+import sequtils
 
 import nimlsppkg / languageserver
 
@@ -17,12 +17,12 @@ var
   ls: LanguageServer
   id, iwp, irp, owp, orp: int
 
-proc sendFrame(data: string) =
-    irp = i.getPosition
-    i.setPosition(iwp)
-    baseprotocol.sendFrame(i, data)
-    iwp = i.getPosition
-    i.setPosition(irp)
+# proc sendFrame(data: string) =
+#     irp = i.getPosition
+#     i.setPosition(iwp)
+#     baseprotocol.sendFrame(i, data)
+#     iwp = i.getPosition
+#     i.setPosition(irp)
 proc sendJson(data: JsonNode) =
     irp = i.getPosition
     i.setPosition(iwp)
@@ -36,7 +36,7 @@ proc readFrame(): string =
     orp = o.getPosition
     o.setPosition(owp)
 
-proc nextId(): int =
+proc nextId(): int {.discardable.} =
   inc id
   id
 
@@ -50,7 +50,7 @@ suite "Nim Language Server Core Tests":
     irp = i.getPosition
     owp = o.getPosition
     orp = o.getPosition
-    inc id
+    nextId()
 
   test "Needs to be initialized or will error on any other requests":
     let r = create(RequestMessage, "2.0", id, "lol", none(JsonNode)).JsonNode
@@ -144,7 +144,6 @@ suite "Nim Language Server Core Tests":
     var frame = readFrame()
     var message = frame.parseJson
     check message.isValid(ResponseMessage)
-    var data = ResponseMessage(message)
     checkpoint "Retrieved ResponseMesage"
     check message["result"].isValid(InitializeResult)
     var initRes = InitializeResult(message["result"])

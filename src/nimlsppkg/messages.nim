@@ -7,7 +7,6 @@ import json
 import options
 import sequtils
 
-
 jsonSchema:
   Message:
     jsonrpc: string
