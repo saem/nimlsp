@@ -57,26 +57,31 @@ when isMainModule:
   type
     MsgKind {.pure.} = enum
       str, err
-    Msg = ref MsgObj
+    # Msg = ref MsgObj
     MsgMeta = object
       count: int
-    MsgObj = object
+    Msg = object
       meta*: MsgMeta
       case kind: MsgKind
       of MsgKind.str: frame*: TaintedString
       of MsgKind.err: error*: ref CatchableError
+    RemClntRdr = tuple
+      frames: ptr Channel[Msg]
+      ins: Stream
 
   var
     inputFrames: Channel[Msg]
-    prod, cons: Thread[void]
+    prod: Thread[RemClntRdr]
+    cons: Thread[ptr Channel[Msg]]
 
-  proc inputReader() {.gcsafe.} =
+  proc inputReader(clnt: RemClntRdr) {.gcsafe, thread.} =
+    template frames(): var Channel[Msg] {.dirty.} = clnt.frames[]
     var
       msgCount = 0
       ins = newFileStream(stdin)
     while msgCount <= maxMessagCount:
       try:
-        var wasSent = inputFrames.trySend Msg(
+        var wasSent = frames.trySend Msg(
           kind: MsgKind.str,
           meta: MsgMeta(count: msgCount),
           frame: ins.readLine
@@ -87,7 +92,7 @@ when isMainModule:
         else:
           sleep(10) # just wait, hopefully that'll clear it out
       except CatchableError as e:
-        inputFrames.send Msg(
+        frames.send Msg(
           kind: MsgKind.err,
           meta: MsgMeta(count: msgCount),
           error: e
@@ -98,16 +103,21 @@ when isMainModule:
       of MsgKind.str: m.frame
       of MsgKind.err: m.error.msg)
 
-  proc inputConsumer() {.gcsafe.} =
+  proc inputConsumer(framesPtr: ptr Channel[Msg]) {.gcsafe, thread.} =
+    template frames(): var Channel[Msg] {.dirty.} = framesPtr[]
     var msgCount: int
     while msgCount < maxMessagCount:
-      var msg = inputFrames.recv
+      var msg = frames.recv
       msgCount = msg.meta.count
       echo "echo: " & $(msg)
 
-  inputFrames.open()
-  createThread(prod, inputReader)
-  createThread(cons, inputConsumer)
+  inputFrames.open(100)
+  createThread(
+    prod,
+    inputReader,
+    (inputFrames.addr, newStringStream("test"))
+  )
+  createThread(cons, inputConsumer, inputFrames.addr)
   prod.joinThread()
   cons.joinThread()
   inputFrames.close()
