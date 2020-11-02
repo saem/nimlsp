@@ -78,7 +78,7 @@ when isMainModule:
     template frames(): var Channel[Msg] {.dirty.} = clnt.frames[]
     var
       msgCount = 0
-      ins = newFileStream(stdin)
+      ins = clnt.ins
     while msgCount <= maxMessagCount:
       try:
         var wasSent = frames.trySend Msg(
@@ -115,7 +115,7 @@ when isMainModule:
   createThread(
     prod,
     inputReader,
-    (inputFrames.addr, newStringStream("test"))
+    (inputFrames.addr, newFileStream(stdin))
   )
   createThread(cons, inputConsumer, inputFrames.addr)
   prod.joinThread()
