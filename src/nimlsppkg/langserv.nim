@@ -36,8 +36,9 @@ type
     protocol*: Protocol
 
 when isMainModule:
+  # nim c -r --threads:on --outDir:out src/nimlsppkg/langserv.nim
   const
-    maxMessagCount = 4
+    maxMessageCount = 4
   let server = Server(
     startParams: ServerStartParams(
       nimpath: NimPath(getCurrentCompilerExe().parentDir.parentDir),
@@ -79,18 +80,15 @@ when isMainModule:
     var
       msgCount = 0
       ins = clnt.ins
-    while msgCount <= maxMessagCount:
+    while msgCount <= maxMessageCount:
       try:
-        var wasSent = frames.trySend Msg(
+        frames.send Msg(
           kind: MsgKind.str,
           meta: MsgMeta(count: msgCount),
           frame: ins.readLine
           # frame: ins.readFrame()
         )
-        if wasSent:
-          inc msgCount
-        else:
-          sleep(10) # just wait, hopefully that'll clear it out
+        inc msgCount
       except CatchableError as e:
         frames.send Msg(
           kind: MsgKind.err,
@@ -106,7 +104,7 @@ when isMainModule:
   proc inputConsumer(framesPtr: ptr Channel[Msg]) {.gcsafe, thread.} =
     template frames(): var Channel[Msg] {.dirty.} = framesPtr[]
     var msgCount: int
-    while msgCount < maxMessagCount:
+    while msgCount < maxMessageCount:
       var msg = frames.recv
       msgCount = msg.meta.count
       echo "echo: " & $(msg)
