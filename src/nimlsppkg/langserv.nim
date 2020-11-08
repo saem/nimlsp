@@ -1,10 +1,33 @@
 from os import getCurrentCompilerExe, parentDir, `/`
+from uri import Uri
+from streams import Stream
+from tables import OrderedTable
 
 include messages
 
 type
 # Common Types
   Version* = distinct string
+  RawFrame* = string
+
+  #                                                                        +---------------------+
+  #                                                                        |                     |
+  #                                                                        | nimsuggest process  |
+  #                                                                        |                     |
+  #                                                                        |                     |
+  #                                                                        +---------------------+
+  # +--------------------------+           +---------------------+
+  # |                          |           |                     |         +---------------------+
+  # |                          |           |                     |         |                     |
+  # | Language Client          |           |    Language Server  |         |  nimsuggest process |
+  # |                          |           |                     |         |                     |
+  # |                          |           |                     |         +---------------------+
+  # |                          |           |                     |
+  # |                          |           +---------------------+         +---------------------+
+  # +--------------------------+                                           |                     |
+  #                                                                        |  nimpretty          |
+  #                                                                        |                     |
+  #                                                                        +---------------------+
 
 # Server Types
   NimPath* = distinct string
@@ -12,6 +35,36 @@ type
   ServerStartParams* = object
     nimpath*: NimPath
     version*: ServerVersion
+  IdSeq = uint32
+  Id = uint32
+
+  SendKind {.pure.} = enum
+    msg, exit
+  Send = object
+    id*: Id
+    case kind*: SendKind
+    of msg: frame*: RawFrame
+    of exit: discard
+  MsgKind {.pure.} = enum
+    recv, sent, recvErr, sendErr
+  MsgMeta = object
+    count: int
+  Msg = object
+    meta*: MsgMeta
+    case kind*: MsgKind
+    of MsgKind.sent: sendId*: Id
+    of MsgKind.recv: frame*: TaintedString
+    of MsgKind.recvErr, MsgKind.sendErr: error*: ref CatchableError
+  RemoteClientSend = tuple
+    send: ptr Channel[Send]
+    recv: ptr Channel[Msg]
+    outs: Stream
+  RemoteClientRecv = tuple
+    recv: ptr Channel[Msg]
+    ins: Stream
+  RemoteClient = object
+    sendWorker*: Thread[RemoteClientSend]
+    recvWorker*: Thread[RemoteClientRecv]
 
   ProtocolStage* {.pure.} = enum
     # Represents the lifecycle of the LSP
@@ -24,16 +77,28 @@ type
   ProtocolCapability* {.pure, size: sizeof(int32).} = enum
     workspaceFolders
   ProtocolCapabilities* = set[ProtocolCapability]
-  RemoteClient* = ref object
+
+  ReceivedFrame = object
+    frameId*: Id
+    frame*: TaintedString
+  PendingFrame = object
+    frameId*: Id
+    frame*: RawFrame
+
+  ProtocolClient* = ref object
     capabilities*: ClientCapabilities
+    framesReceived*: OrderedTable[Id, ReceivedFrame]
+    framesPending*: OrderedTable[Id, PendingFrame]
   Protocol = ref object
     stage*: ProtocolStage
     capabilities*: ProtocolCapabilities
-    client*: RemoteClient
+    client*: ProtocolClient
+    rootUri*: Uri
 
   Server = ref object
     startParams*: ServerStartParams
     protocol*: Protocol
+    idSeq*: IdSeq
 
 when isMainModule:
   # nim c -r --threads:on --outDir:out src/nimlsppkg/langserv.nim
@@ -47,76 +112,145 @@ when isMainModule:
     protocol: Protocol(
       stage: uninitialized,
       capabilities: {},
-      client: RemoteClient()
+      client: ProtocolClient()
     )
   )
 
   import baseprotocol
   import streams
   import os
+  from strutils import strip
 
   type
-    MsgKind {.pure.} = enum
-      str, err
-    # Msg = ref MsgObj
-    MsgMeta = object
-      count: int
-    Msg = object
-      meta*: MsgMeta
-      case kind: MsgKind
-      of MsgKind.str: frame*: TaintedString
-      of MsgKind.err: error*: ref CatchableError
     RemClntRdr = tuple
-      frames: ptr Channel[Msg]
+      recv: ptr Channel[Msg]
       ins: Stream
+    Processor = tuple
+      send: ptr Channel[Send]
+      recv: ptr Channel[Msg]
+    RemClntWtr = tuple
+      send: ptr Channel[Send]
+      recv: ptr Channel[Msg]
+      outs: Stream
 
   var
     inputFrames: Channel[Msg]
-    prod: Thread[RemClntRdr]
-    cons: Thread[ptr Channel[Msg]]
+    outputFrames: Channel[Send]
+    inputWorker: Thread[RemClntRdr]
+    processor: Thread[Processor]
+    outputWorker: Thread[RemClntWtr]
 
   proc inputReader(clnt: RemClntRdr) {.gcsafe, thread.} =
-    template frames(): var Channel[Msg] {.dirty.} = clnt.frames[]
+    template recv(): var Channel[Msg] {.dirty.} = clnt.recv[]
     var
       msgCount = 0
       ins = clnt.ins
-    while msgCount <= maxMessageCount:
+      doNotQuit = true
+    while doNotQuit:
       try:
-        frames.send Msg(
-          kind: MsgKind.str,
+        var read = ins.readLine
+        # var read = ins.readFrame
+        recv.send Msg(
+          kind: MsgKind.recv,
           meta: MsgMeta(count: msgCount),
-          frame: ins.readLine
-          # frame: ins.readFrame()
+          frame: read
         )
         inc msgCount
+        doNotQuit = read.strip() != "quit"
       except CatchableError as e:
-        frames.send Msg(
-          kind: MsgKind.err,
+        recv.send Msg(
+          kind: MsgKind.recvErr,
           meta: MsgMeta(count: msgCount),
           error: e
         )
 
   proc `$`(m: Msg): string =
     result = "count: " & $(m.meta.count) & " " & (case m.kind
-      of MsgKind.str: m.frame
-      of MsgKind.err: m.error.msg)
+      of MsgKind.recv: m.frame
+      of MsgKind.sent: $m.sendId
+      of MsgKind.recvErr, MsgKind.sendErr: m.error.msg)
 
-  proc inputConsumer(framesPtr: ptr Channel[Msg]) {.gcsafe, thread.} =
-    template frames(): var Channel[Msg] {.dirty.} = framesPtr[]
-    var msgCount: int
-    while msgCount < maxMessageCount:
+  proc process(processor: Processor) {.gcsafe, thread.} =
+    template frames(): var Channel[Msg] {.dirty.} = processor.recv[]
+    template output(): var Channel[Send] {.dirty.} = processor.send[]
+    var
+      msgCount: int
+      sentCount = 0
+      recvCount = 0
+      errCount = 0
+      id: uint32 = 0
+      doNotQuit = true
+    while doNotQuit:
       var msg = frames.recv
-      msgCount = msg.meta.count
-      echo "echo: " & $(msg)
+      msgCount = max(msgCount, msg.meta.count)
+      case msg.kind
+      of MsgKind.recv:
+        inc id
+        recvCount = max(msg.meta.count, recvCount)
+        if msg.frame.strip() == "quit":
+          doNotQuit = false
+          output.send Send(id: id, kind: SendKind.msg, frame: "Msgs: " & $msgCount)
+          output.send Send(id: id, kind: SendKind.exit)
+          continue
+        output.send Send(id: id, kind: SendKind.msg, frame: msg.frame)
+      of MsgKind.sent:
+        sentCount = max(msg.meta.count, sentCount)
+      of MsgKind.recvErr, MsgKind.sendErr:
+        inc id
+        inc errCount
+        output.send Send(id: id, kind: SendKind.msg, frame: "error " & $msg)
+      msgCount = sentCount + recvCount + errCount
+      
+  proc outputWriter(clnt: RemClntWtr) {.gcsafe.} =
+    template toClnt(): var Channel[Send] {.dirty.} = clnt.send[]
+    template sendStatus(): var Channel[Msg] {.dirty.} = clnt.recv[]
+    var
+      msgCount = 0
+      outs = clnt.outs
+      doNotQuit = true
+    while doNotQuit:
+      try:
+        let send = toClnt.recv
+        inc msgCount
+
+        if send.kind == SendKind.exit:
+          outs.sendFrame "Got quit message"
+          doNotQuit = false
+          continue
+
+        outs.sendFrame "Frame: (" & $send.id & ") " & send.frame
+        sendStatus.send Msg(
+          kind: MsgKind.sent,
+          meta: MsgMeta(count: msgCount),
+          sendId: send.id
+        )
+      except CatchableError as e:
+        outs.sendFrame "Failed to write frame last message count: " & $msgCount
+        sendStatus.send Msg(
+          kind: MsgKind.sendErr,
+          meta: MsgMeta(count: msgCount),
+          error: e
+        )
 
   inputFrames.open(100)
+  outputFrames.open(100)
   createThread(
-    prod,
+    inputWorker,
     inputReader,
     (inputFrames.addr, newFileStream(stdin))
   )
-  createThread(cons, inputConsumer, inputFrames.addr)
-  prod.joinThread()
-  cons.joinThread()
+  createThread(
+    processor,
+    process,
+    (outputFrames.addr, inputFrames.addr))
+  createThread(
+    outputWorker,
+    outputWriter,
+    (outputFrames.addr, inputFrames.addr, newFileStream(stdout))
+  )
+  inputWorker.joinThread()
+  processor.joinThread()
+  # outputWorker.joinThread() # might be asking for bugs, ignoring for now
   inputFrames.close()
+  outputFrames.close()
   echo "exit"
