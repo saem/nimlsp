@@ -13,11 +13,14 @@ proc skipWhitespace(x: string, pos: int): int =
   while result < x.len and x[result] in Whitespace:
     inc result
 
+template stringToFrame*(s: string): string =
+  "Content-Length: " & $s.len & "\r\n\r\n" & s
+
 proc sendFrame*(s: Stream, frame: string) =
   when defined(debugCommunication):
     stderr.write(frame)
     stderr.write("\n")
-  s.write "Content-Length: " & $frame.len & "\r\n\r\n" & frame
+  s.write stringToFrame(frame)
   s.flush
 
 proc sendJson*(s: Stream, data: JsonNode) =
