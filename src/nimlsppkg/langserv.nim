@@ -55,16 +55,20 @@ type
     of MsgKind.sent: sendId*: Id
     of MsgKind.recv: frame*: TaintedString
     of MsgKind.recvErr, MsgKind.sendErr: error*: ref CatchableError
-  RemoteClientSend = tuple
+  ClientDriverSend = tuple
     send: ptr Channel[Send]
     recv: ptr Channel[Msg]
     outs: Stream
-  RemoteClientRecv = tuple
+  ClientDriverRecv = tuple
     recv: ptr Channel[Msg]
     ins: Stream
-  RemoteClient = object
-    sendWorker*: Thread[RemoteClientSend]
-    recvWorker*: Thread[RemoteClientRecv]
+  ClientDriver = object
+    sendWorker*: Thread[ClientDriverSend]
+    recvWorker*: Thread[ClientDriverRecv]
+    send*: ptr Channel[Send]
+    recv*: ptr Channel[Msg]
+    ins*: Stream
+    outs*: Stream
 
   ProtocolStage* {.pure.} = enum
     # Represents the lifecycle of the LSP
@@ -93,17 +97,21 @@ type
     stage*: ProtocolStage
     capabilities*: ProtocolCapabilities
     client*: ProtocolClient
-    rootUri*: Uri
+    rootUri*: Option[Uri]
 
   Server = ref object
     startParams*: ServerStartParams
     protocol*: Protocol
     idSeq*: IdSeq
 
+proc initClientDriverSend(c: var ClientDriver): ClientDriverSend {.inline.} =
+  result = (c.send, c.recv, c.outs)
+
+proc initClientDriverRecv(c: var ClientDriver): ClientDriverRecv {.inline.} =
+  result = (c.recv, c.ins)
+
 when isMainModule:
   # nim c -r --threads:on --outDir:out src/nimlsppkg/langserv.nim
-  const
-    maxMessageCount = 4
   let server = Server(
     startParams: ServerStartParams(
       nimpath: NimPath(getCurrentCompilerExe().parentDir.parentDir),
@@ -122,25 +130,22 @@ when isMainModule:
   from strutils import strip
 
   type
-    RemClntRdr = tuple
-      recv: ptr Channel[Msg]
-      ins: Stream
     Processor = tuple
       send: ptr Channel[Send]
       recv: ptr Channel[Msg]
-    RemClntWtr = tuple
-      send: ptr Channel[Send]
-      recv: ptr Channel[Msg]
-      outs: Stream
 
   var
     inputFrames: Channel[Msg]
     outputFrames: Channel[Send]
-    inputWorker: Thread[RemClntRdr]
-    processor: Thread[Processor]
-    outputWorker: Thread[RemClntWtr]
+    processor: Thread[Processor] 
+    clientDriver = ClientDriver(
+      send: outputFrames.addr,
+      recv: inputFrames.addr,
+      ins: newFileStream(stdin),
+      outs: newFileStream(stdout)
+    )
 
-  proc inputReader(clnt: RemClntRdr) {.thread.} =
+  proc inputReader(clnt: ClientDriverRecv) {.thread.} =
     template recv(): var Channel[Msg] = clnt.recv[]
     var
       msgCount = 0
@@ -174,7 +179,7 @@ when isMainModule:
     template frames(): var Channel[Msg] = processor.recv[]
     template output(): var Channel[Send] = processor.send[]
     var
-      msgCount: int
+      msgCount = 0
       sentCount = 0
       recvCount = 0
       errCount = 0
@@ -201,7 +206,7 @@ when isMainModule:
         output.send Send(id: id, kind: SendKind.msg, frame: "error " & $msg)
       msgCount = sentCount + recvCount + errCount
 
-  proc outputWriter(clnt: RemClntWtr) {.thread.} =
+  proc outputWriter(clnt: ClientDriverSend) {.thread.} =
     template toClnt(): var Channel[Send] = clnt.send[]
     template sendStatus(): var Channel[Msg] = clnt.recv[]
     var
@@ -235,22 +240,22 @@ when isMainModule:
   inputFrames.open(100)
   outputFrames.open(100)
   createThread(
-    inputWorker,
+    clientDriver.recvWorker,
     inputReader,
-    (inputFrames.addr, newFileStream(stdin))
+    clientDriver.initClientDriverRecv()
   )
   createThread(
     processor,
     process,
     (outputFrames.addr, inputFrames.addr))
   createThread(
-    outputWorker,
+    clientDriver.sendWorker,
     outputWriter,
-    (outputFrames.addr, inputFrames.addr, newFileStream(stdout))
+    clientDriver.initClientDriverSend()
   )
-  inputWorker.joinThread()
+  clientDriver.recvWorker.joinThread()
   processor.joinThread()
-  # outputWorker.joinThread() # might be asking for bugs, ignoring for now
+  # clientDriver.sendWorker.joinThread() # might be asking for bugs, ignoring for now
   inputFrames.close()
   outputFrames.close()
   echo "exit"
