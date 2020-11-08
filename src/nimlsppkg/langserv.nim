@@ -140,8 +140,8 @@ when isMainModule:
     processor: Thread[Processor]
     outputWorker: Thread[RemClntWtr]
 
-  proc inputReader(clnt: RemClntRdr) {.gcsafe, thread.} =
-    template recv(): var Channel[Msg] {.dirty.} = clnt.recv[]
+  proc inputReader(clnt: RemClntRdr) {.thread.} =
+    template recv(): var Channel[Msg] = clnt.recv[]
     var
       msgCount = 0
       ins = clnt.ins
@@ -170,9 +170,9 @@ when isMainModule:
       of MsgKind.sent: $m.sendId
       of MsgKind.recvErr, MsgKind.sendErr: m.error.msg)
 
-  proc process(processor: Processor) {.gcsafe, thread.} =
-    template frames(): var Channel[Msg] {.dirty.} = processor.recv[]
-    template output(): var Channel[Send] {.dirty.} = processor.send[]
+  proc process(processor: Processor) {.thread.} =
+    template frames(): var Channel[Msg] = processor.recv[]
+    template output(): var Channel[Send] = processor.send[]
     var
       msgCount: int
       sentCount = 0
@@ -189,7 +189,7 @@ when isMainModule:
         recvCount = max(msg.meta.count, recvCount)
         if msg.frame.strip() == "quit":
           doNotQuit = false
-          output.send Send(id: id, kind: SendKind.msg, frame: "Msgs: " & $msgCount)
+          output.send Send(id: id, kind: SendKind.msg, frame: "Total Msgs: " & $msgCount)
           output.send Send(id: id, kind: SendKind.exit)
           continue
         output.send Send(id: id, kind: SendKind.msg, frame: msg.frame)
@@ -200,10 +200,10 @@ when isMainModule:
         inc errCount
         output.send Send(id: id, kind: SendKind.msg, frame: "error " & $msg)
       msgCount = sentCount + recvCount + errCount
-      
-  proc outputWriter(clnt: RemClntWtr) {.gcsafe.} =
-    template toClnt(): var Channel[Send] {.dirty.} = clnt.send[]
-    template sendStatus(): var Channel[Msg] {.dirty.} = clnt.recv[]
+
+  proc outputWriter(clnt: RemClntWtr) {.thread.} =
+    template toClnt(): var Channel[Send] = clnt.send[]
+    template sendStatus(): var Channel[Msg] = clnt.recv[]
     var
       msgCount = 0
       outs = clnt.outs
