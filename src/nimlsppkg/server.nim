@@ -1,5 +1,6 @@
 import langserv
 import baseprotocol
+import stdiodriver
 import streams
 import os
 from strutils import strip
@@ -15,12 +16,7 @@ var
   inputFrames: Channel[Msg]
   outputFrames: Channel[Send]
   processor: Thread[Processor] 
-  clientDriver = ClientDriver(
-    send: outputFrames.addr,
-    recv: inputFrames.addr,
-    ins: newFileStream(stdin),
-    outs: newFileStream(stdout)
-  )
+  clientDriver = initClientDriver(outputFrames.addr, inputFrames.addr)
 
 proc inputReader(clnt: ClientDriverRecv) {.thread.} =
   template recv(): var Channel[Msg] = clnt.recv[]

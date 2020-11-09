@@ -1,7 +1,9 @@
 from os import getCurrentCompilerExe, parentDir, `/`
 from uri import Uri
-from streams import Stream
+from streams import Stream, newFileStream
 from tables import OrderedTableRef, `[]=`, pairs, newOrderedTable
+
+import stdiodriver
 
 include messages
 
@@ -37,39 +39,6 @@ type
     version*: ServerVersion
   IdSeq = uint32
   Id = uint32
-
-  SendKind* {.pure.} = enum
-    msg, exit
-  Send* = object
-    id*: Id
-    case kind*: SendKind
-    of msg: frame*: RawFrame
-    of exit: discard
-  MsgKind* {.pure.} = enum
-    recv, sent, recvErr, sendErr
-  MsgMeta* = object
-    count*: int
-  Msg* = object
-    meta*: MsgMeta
-    case kind*: MsgKind
-    of MsgKind.sent: sendId*: Id
-    of MsgKind.recv: frame*: TaintedString
-    of MsgKind.recvErr, MsgKind.sendErr: error*: ref CatchableError
-
-  ClientDriverSend* = tuple
-    send: ptr Channel[Send]
-    recv: ptr Channel[Msg]
-    outs: Stream
-  ClientDriverRecv* = tuple
-    recv: ptr Channel[Msg]
-    ins: Stream
-  ClientDriver* = object
-    sendWorker*: Thread[ClientDriverSend]
-    recvWorker*: Thread[ClientDriverRecv]
-    send*: ptr Channel[Send]
-    recv*: ptr Channel[Msg]
-    ins*: Stream
-    outs*: Stream
 
   ProtocolStage* {.pure.} = enum
     # Represents the lifecycle of the LSP
@@ -110,18 +79,6 @@ proc nextId(s: var Server): Id =
   inc s.idSeq
   result = s.idSeq
 
-proc `$`*(m: Msg): string =
-  result = "count: " & $(m.meta.count) & " " & (case m.kind
-    of MsgKind.recv: m.frame
-    of MsgKind.sent: $m.sendId
-    of MsgKind.recvErr, MsgKind.sendErr: m.error.msg)
-
-proc initClientDriverSend*(c: var ClientDriver): ClientDriverSend {.inline.} =
-  result = (c.send, c.recv, c.outs)
-
-proc initClientDriverRecv*(c: var ClientDriver): ClientDriverRecv {.inline.} =
-  result = (c.recv, c.ins)
-
 proc recvDriverInput(c: var ProtocolClient, s: var Server) =
   let tried = c.driver.recv[].tryRecv()
   if tried.dataAvailable:
@@ -141,11 +98,11 @@ when isMainModule:
   var
     clientMsgs: Channel[Msg]
     msgsToClient: Channel[Send]
-    clientDriver = ClientDriver(
-      send: msgsToClient.addr,
-      recv: clientMsgs.addr,
-      ins: newStringStream(""),
-      outs: newStringStream("")
+    clientDriver = initClientDriver(
+      msgsToClient.addr,
+      clientMsgs.addr,
+      newStringStream(""),
+      newStringStream("")
     )
     server = Server(
       startParams: ServerStartParams(
