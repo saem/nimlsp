@@ -1,6 +1,5 @@
 from os import getCurrentCompilerExe, parentDir, `/`
 from uri import Uri
-from streams import Stream, newFileStream
 from tables import OrderedTableRef, `[]=`, pairs, newOrderedTable
 
 import stdiodriver
@@ -32,11 +31,6 @@ type
 #                                                                        +----------------------+
 
 # Server Types
-  NimPath* = distinct string
-  ServerVersion* = Version
-  ServerStartParams* = object
-    nimpath*: NimPath
-    version*: ServerVersion
   IdSeq = uint32
   Id = uint32
 
@@ -69,6 +63,12 @@ type
     capabilities*: ProtocolCapabilities
     client*: ProtocolClient
     rootUri*: Option[Uri]
+
+  NimPath* = distinct string
+  ServerVersion* = Version
+  ServerStartParams* = object
+    nimpath*: NimPath
+    version*: ServerVersion
 
   Server = ref object
     startParams*: ServerStartParams

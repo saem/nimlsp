@@ -6,31 +6,9 @@ when isMainModule:
   import streams
   import sequtils
 
-  type
-    SendId = Natural
-    Send = object
-      sendId: SendId
-      frame: string
-    MsgKind {.pure.} = enum
-      recv, sent, recvErr, sendErr
-    MsgMeta = object
-      count: int
-    Msg = object
-      meta*: MsgMeta
-      case kind: MsgKind
-      of MsgKind.sent: sendId*: SendId
-      of MsgKind.recv: frame*: TaintedString
-      of MsgKind.recvErr, MsgKind.sendErr: error*: ref CatchableError
+  import stdiodriver
 
-    RemSrvrSend = tuple
-      send: ptr Channel[Send]
-      recv: ptr Channel[Msg]
-      outs: Stream
-    RemSrvrRecv = tuple
-      recv: ptr Channel[Msg]
-      ins: Stream
-
-  proc sendWorker(remServer: RemSrvrSend) {.gcsafe, thread.} =
+  proc sendWorker(remServer: StdioDriverSend) {.gcsafe, thread.} =
     template forServer(): var Channel[Send] {.dirty.} = remServer.send[]
     template sendStatus(): var Channel[Msg] {.dirty.} = remServer.recv[]
 
@@ -43,7 +21,7 @@ when isMainModule:
         sendStatus.send Msg(
           kind: MsgKind.sent,
           meta: MsgMeta(count: msgCount),
-          sendId: send.sendId
+          sendId: send.id
         )
       except CatchableError as e:
         sendStatus.send Msg(
@@ -52,7 +30,7 @@ when isMainModule:
           error: e
         )
 
-  proc receiveWorker(remServer: RemSrvrRecv) {.gcsafe, thread.} =
+  proc receiveWorker(remServer: StdioDriverRecv) {.gcsafe, thread.} =
     template fromServer(): var Channel[Msg] {.dirty.} = remServer.recv[]
     var msgCount: int
     while true:
@@ -71,33 +49,26 @@ when isMainModule:
           error: e
         )
 
-  proc `$`(m: Msg): string =
-    result = "count: " & $(m.meta.count) & " " & (case m.kind
-      of MsgKind.recv: m.frame
-      of MsgKind.sent: $(m.sendId)
-      of MsgKind.recvErr, MsgKind.sendErr: m.error.msg)
-
   var
     serverSend: Channel[Send]
     serverRecv: Channel[Msg]
-    sender: Thread[RemSrvrSend]
-    receiver: Thread[RemSrvrRecv]
+    serverDriver = initStdioDriver(serverSend.addr, serverRecv.addr)
 
   serverSend.open(100)
   serverRecv.open(100)
   createThread(
-    sender,
+    serverDriver.sendWorker,
     sendWorker,
-    (serverSend.addr, serverRecv.addr, newFileStream(stdout))
+    serverDriver.initStdioDriverSend()
   )
   createThread(
-    receiver,
+    serverDriver.recvWorker,
     receiveWorker,
-    (serverRecv.addr, newFileStream(stdin))
+    serverDriver.initStdioDriverRecv()
   )
 
   for i, m in @["test", "best", "worst"].mapIt(it & "\n"):
-    serverSend.send(Send(sendId: i, frame: m))
+    serverSend.send(Send(id: uint32(i), kind: SendKind.msg, frame: m))
   
   echo "waiting for input"
   sleep(3000)
@@ -125,8 +96,8 @@ when isMainModule:
   echo "done"
   quit(0)
 
-  sender.joinThread()
-  receiver.joinThread()
+  serverDriver.sendWorker.joinThread()
+  serverDriver.recvWorker.joinThread()
   serverSend.close()
   serverRecv.close()
   echo "exit"
