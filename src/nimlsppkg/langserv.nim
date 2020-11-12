@@ -463,5 +463,3 @@ when isMainModule:
       debugLog "received " & $msgsToClient.recv
     server.recvDriverInput()
     progress = server.processRequest()
-  # for f in server.protocol.client.framesReceived:
-  #   debugLog("key: " & $f.frameId & " value: " & f.frame)
