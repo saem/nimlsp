@@ -16,6 +16,11 @@ proc skipWhitespace(x: string, pos: int): int =
 template stringToFrame*(s: string): string =
   "Content-Length: " & $s.len & "\r\n\r\n" & s
 
+template jsonToFrame*(data: JsonNode): string =
+  var frame = newStringOfCap(1024)
+  toUgly(frame, data)
+  frame
+
 proc sendFrame*(s: Stream, frame: string) =
   when defined(debugCommunication):
     stderr.write(frame)
@@ -24,9 +29,7 @@ proc sendFrame*(s: Stream, frame: string) =
   s.flush
 
 proc sendJson*(s: Stream, data: JsonNode) =
-  var frame = newStringOfCap(1024)
-  toUgly(frame, data)
-  s.sendFrame(frame)
+  s.sendFrame(jsonToFrame(data))
 
 proc readFrame*(s: Stream): TaintedString =
   var contentLen = -1
