@@ -108,17 +108,6 @@ template debugLog(args: varargs[string, `$`]) =
   let pos = instantiationInfo()
   debugLog((file: pos.filename, line: pos.line, level: Log, msg: join args))
 
-proc recvDriverInput(s: var Server) =
-  var c = s.protocol.client
-  let tried = c.driver.recv[].tryRecv()
-  if tried.dataAvailable:
-    case tried.msg.kind
-    of MsgKind.recv:
-      let id = s.nextId
-      c.framesReceived.add ReceivedFrame(frameId: id, frame: tried.msg.frame)
-    of MsgKind.sent, MsgKind.recvErr, MsgKind.sendErr:
-      debugLog($tried.msg)
-
 proc parseId(node: JsonNode): int =
   # TODO - confirm whether expecting id to be an int is valid
 
@@ -388,6 +377,23 @@ proc processRequest(server: var Server): Progress =
 
   return Progress.yes
 
+proc recvDriverInput(s: var Server) =
+  var c = s.protocol.client
+  let tried = c.driver.recv[].tryRecv()
+  if tried.dataAvailable:
+    case tried.msg.kind
+    of MsgKind.recv:
+      let id = s.currId
+      c.framesReceived.add ReceivedFrame(frameId: id, frame: tried.msg.frame)
+    of MsgKind.sent, MsgKind.recvErr, MsgKind.sendErr:
+      debugLog($tried.msg)
+
+proc sendFrames(s: var Server) =
+  var c = s.protocol.client
+  while c.framesPending.len > 0:
+    let f = c.framesPending.pop
+    c.driver.send[].send Send(id: f.frameId, kind: SendKind.msg, frame: f.frame)
+
 when isMainModule:
   # nim c -r --threads:on --outDir:out src/nimlsppkg/langserv.nim
 
@@ -418,8 +424,9 @@ when isMainModule:
         )
       )
     )
-  
+
   clientMsgs.open(100)
+  msgsToClient.open(100)
   clientMsgs.send Msg(
     meta: MsgMeta(count: 1),
     kind: MsgKind.recv,
@@ -447,8 +454,14 @@ when isMainModule:
     frame: $create(NotificationMessage, "2.0", "initialized", none(JsonNode)).JsonNode
   )
 
-  server.recvDriverInput()
-  while server.processRequest() == yes:
+  var progress = Progress.yes
+  while progress == yes:
+    # TODO id handling should be based on the item and source being processed
+    discard server.nextId
+    server.sendFrames()
+    while msgsToClient.peek() > 0:
+      debugLog "received " & $msgsToClient.recv
     server.recvDriverInput()
+    progress = server.processRequest()
   # for f in server.protocol.client.framesReceived:
   #   debugLog("key: " & $f.frameId & " value: " & f.frame)

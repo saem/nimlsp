@@ -28,6 +28,11 @@ proc `$`*(m: Msg): string =
     of MsgKind.sent: $m.sendId
     of MsgKind.recvErr, MsgKind.sendErr: m.error.msg)
 
+proc `$`*(s: Send): string =
+  result = "id: " & $s.id & " " & (case s.kind
+    of SendKind.msg: "msg: " & s.frame
+    of SendKind.exit: "exit")
+
 type
   StdioDriverSend* = tuple
     send: ptr Channel[Send]
