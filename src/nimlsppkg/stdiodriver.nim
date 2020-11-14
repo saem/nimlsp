@@ -26,7 +26,7 @@ proc `$`*(m: Msg): string =
   result = "count: " & $(m.meta.count) & " " & (case m.kind
     of MsgKind.recv: m.frame
     of MsgKind.sent: $m.sendId
-    of MsgKind.recvErr, MsgKind.sendErr: m.error.msg)
+    of MsgKind.recvErr, MsgKind.sendErr: m.error.msg & "\n" & m.error.getStackTrace)
 
 proc `$`*(s: Send): string =
   result = "id: " & $s.id & " " & (case s.kind
