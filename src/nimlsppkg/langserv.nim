@@ -2,6 +2,7 @@ from os import getCurrentCompilerExe, parentDir, `/`
 from uri import Uri
 from tables import OrderedTableRef, `[]=`, pairs, newOrderedTable, len
 from strutils import `%`, join, parseInt
+from sugar import `=>`
 
 import stdiodriver
 import baseprotocol
@@ -260,18 +261,12 @@ proc processRequestUninitialized(server: var Server, message: JsonNode) =
         let caps = params["capabilities"]
         whenValid(caps, ClientCapabilities) do:
           server.protocol.client.capabilities = caps
-          if caps["workspace"].isSome:
-            var ws = WorkspaceClientCapabilities(caps["workspace"].unsafeGet)
-            # if ws["configuration"].get(newJBool(false)).getBool(false):
-            #   incl(server.protocol.capabilities, capWorkspaceConfig)
-            if ws["workspaceFolders"].get(newJBool(false)).getBool(false):
+          if caps["workspace"].map((j) => WorkspaceClientCapabilities(j))
+            .map((w) => w["workspaceFolders"])
+            .flatten()
+            .map((w) => w.getBool)
+            .get(false):
               incl(server.protocol.capabilities, capWorkspaceFolders)
-          # if caps["textDocument"].isSome:
-          #   var td = TextDocumentClientCapabilities(caps["textDocument"].unsafeGet)
-          #   if td["publishDiagnostics"].isSome:
-          #     var pd = PublishDiagnosticsClientCapabilities(td["publishDiagnostics"].unsafeGet)
-          #     if pd["relatedInformation"].get(newJBool(false)).getBool(false):
-          #       incl(server.protocol.capabilities, capDiagnosticRelatedInfo)
 
         var serverCaps = serverCapabilities()
         debugLog "Client capabilities " & $server.protocol.capabilities
@@ -439,12 +434,21 @@ when isMainModule:
         rootUri = "file:///tmp",
         initializationOptions = none(JsonNode),
         capabilities = create(ClientCapabilities,
-          workspace = none(WorkspaceClientCapabilities),
+          workspace = some(create(WorkspaceClientCapabilities,
+            applyEdit = none(bool),
+            workspaceEdit = none(WorkspaceEditCapability),
+            didChangeConfiguration = none(DidChangeConfigurationCapability),
+            didChangeWatchedFiles = none(DidChangeWatchedFilesCapability),
+            symbol = none(SymbolCapability),
+            executeCommand = none(ExecuteCommandCapability),
+            configuration = some(true),
+            workspaceFolders = some(true)
+          )),
           textDocument = none(TextDocumentClientCapabilities),
           experimental = none(JsonNode)
         ),
         trace = none(string),
-        workspaceFolders = none(seq[WorkspaceFolder])
+        workspaceFolders = some(newSeq[WorkspaceFolder]())
       ).JsonNode)).JsonNode
   )
 
