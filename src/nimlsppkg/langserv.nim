@@ -126,7 +126,7 @@ proc error(
     request: RequestMessage,
     errorCode: ErrorCode,
     message: string,
-    data: JsonNode
+    data: JsonNode = newJNull()
   ) =
   server.protocol.client.framesPending.add PendingFrame(
     frameId: server.currId,
@@ -184,7 +184,7 @@ proc serverCapabilities(): ServerCapabilities =
       openClose = some(true),
       change = some(TextDocumentSyncKind.Full.int),
       willSave = some(true),
-      willSaveWaitUntil = some(true),
+      willSaveWaitUntil = some(false),
       save = some(create(SaveOptions, includeText = some(true))),
     )),
     completionProvider = some(create(CompletionOptions,
@@ -310,12 +310,8 @@ proc processRequestInitializing(server: var Server, message: JsonNode) =
   whenValid(message, RequestMessage):
     debugLog "Expected 'initialized' notification, got message of type " &
       message["method"].getStr
-    server.error(
-        message,
-        ServerNotInitialized,
-        "Initialized notification not received from client",
-        newJNull()
-      )
+    server.error(message, ServerNotInitialized,
+                 "Initialized notification not received from client")
     return
   whenValid(message, NotificationMessage):
     case message["method"].getStr
@@ -326,6 +322,30 @@ proc processRequestInitializing(server: var Server, message: JsonNode) =
       debugLog "Ignoring client notification of type " & message["method"].getStr
     return
   debugLog "Unhandled message while uninitilized: " & repr(message)
+
+proc processRequestInitialized(server: Server, message: JsonNode) =
+  ## only call this method if the server's lspState is initialized
+
+  debugLog "Got message"
+  whenValid(message, NotificationMessage):
+    let msgMethod = message["method"].getStr
+    debugLog "Notification method: " & msgMethod
+    case msgMethod
+    of "DidChangeConfigurationParams":
+      var params = message["params"].get(newJNull())
+      whenValid(params, DidChangeConfigurationParams):
+        var settings = params["settings"]{"nim"}
+
+        debugLog "Got settings: " & repr(settings)
+    of "textDocument/didOpen":
+      message["params"].filter((p) => p.isValid(DidOpenTextDocumentParams))
+        .map((p) => DidOpenTextDocumentParams(p))
+        .map((p) => TextDocumentItem(p["textDocument"])["uri"].getStr)
+        .map(proc(uri: string) = debugLog "uri: " & uri)
+    return
+
+  debugLog "Got message that wasn't handled: " & repr(message)
+  server.respond(try: parseId(message["id"]) except: -1, message)
 
 proc processRequest(server: var Server): Progress =
   try:
@@ -345,10 +365,10 @@ proc processRequest(server: var Server): Progress =
       server.processRequestUninitialized(message)
     of initializing:
       server.processRequestInitializing(message)
-    of initialized, shuttingdown, stopped:
+    of initialized:
+      server.processRequestInitialized(message)
+    of shuttingdown, stopped:
       discard
-    # of initialized:
-    #   server.processRequestInitialized(message)
     # of shuttingdown:
     #   server.processRequestInitialized(message)
     # of stopped:
@@ -393,7 +413,14 @@ when isMainModule:
   # nim c -r --threads:on --outDir:out src/nimlsppkg/langserv.nim
 
   from streams import newStringStream
-  from baseprotocol import stringToFrame
+  from os import `/`, parentDir
+
+  # assume this was built into and run from ./out project dir
+  const
+    src = parentDir(parentDir(currentSourcePath()))
+    srcNimlspPkg = src / "nimlsppkg"
+    legacyNimSrcName = srcNimlspPkg / "legacyserver.nim"
+    legacyNimSrc = staticRead(legacyNimSrcName)
 
   var
     clientMsgs: Channel[Msg]
@@ -456,6 +483,19 @@ when isMainModule:
     meta: MsgMeta(count: 2),
     kind: MsgKind.recv,
     frame: $create(NotificationMessage, "2.0", "initialized", none(JsonNode)).JsonNode
+  )
+
+  clientMsgs.send Msg(
+    meta: MsgMeta(count: 3),
+    kind: MsgKind.recv,
+    frame: $create(NotificationMessage, "2.0", "textDocument/didOpen",
+                   some(create(DidOpenTextDocumentParams,
+                               create(TextDocumentItem,
+                                      uri = "file://" & legacyNimSrcName,
+                                      languageId = "nim",
+                                      version = 1,
+                                      text = legacyNimSrc)
+                  ).JsonNode)).JsonNode
   )
 
   var progress = Progress.yes
