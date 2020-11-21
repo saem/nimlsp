@@ -1,5 +1,3 @@
-{.push warning[Spacing]: off.}
-
 import messageenums
 # Anything below here comes from the LSP specification
 import jsonschema
@@ -613,5 +611,3 @@ jsonSchema:
     textDocument: TextDocumentIdentifier
     position: Position
     newName: string
-
-{.pop.}
