@@ -2,5 +2,6 @@
 {
     "nim.runOutputDirectory": "out",
     "nim.lintOnSave": true,
-    "nim.project": ["src/nimlsp.nim", "tests/tnimlsp.nim"]
+    "nim.project": ["src/nimlsp.nim", "tests/tnimlsp.nim"],
+    "editor.tabSize": 2
 }
