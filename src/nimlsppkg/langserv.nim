@@ -1,18 +1,15 @@
-from os import getCurrentCompilerExe, parentDir, `/`
+from os import getCurrentCompilerExe, parentDir, `/`, getConfigDir,
+               expandTilde, getEnv, existsEnv, existsOrCreateDir
 from uri import Uri
 from tables import OrderedTableRef, `[]=`, pairs, newOrderedTable, len
-from strutils import `%`, join, parseInt
+from strutils import `%`, join, parseInt, toHex
 from sugar import `=>`
+from hashes import hash
 
 import stdiodriver
 import baseprotocol
 
 include messages
-
-type
-# Common Types
-  Version* = distinct string
-  RawFrame* = string
 
 #                                                                        +----------------------+
 #                                                                        |                      |
@@ -32,6 +29,11 @@ type
 #                                                                        |      nimpretty       |
 #                                                                        |                      |
 #                                                                        +----------------------+
+
+type
+# Common Types
+  Version* = distinct string
+  RawFrame* = string
 
 # Server Types
   IdSeq = uint32
@@ -92,9 +94,18 @@ type
   Server = object
     startParams*: ServerStartParams
     protocol*: Protocol
+    storage*: string
     idSeq*: IdSeq
     currId: Id
       ## id we're currently processing, acts as a context
+
+proc getTempDir*(): string {.tags: [ReadEnvEffect, ReadIOEffect].} =
+  let default = when defined(tempDir):
+      const tempDir {.strdefine.}: string = "/tmp"
+      tempDir
+    elif defined(windows): string(getEnv("TEMP"))
+    elif defined(macos): string(getEnv("TMPDIR", "/tmp"))
+    else: getEnv("XDG_CACHE_HOME", expandTilde("~/.cache")).string
 
 proc nextId(s: var Server): Id =
   inc s.idSeq
@@ -121,13 +132,8 @@ proc parseId(node: JsonNode): int =
     e.id = node
     raise e
 
-proc error(
-    server: Server,
-    request: RequestMessage,
-    errorCode: ErrorCode,
-    message: string,
-    data: JsonNode = newJNull()
-  ) =
+proc error(server: Server, request: RequestMessage, errorCode: ErrorCode,
+           message: string, data: JsonNode = newJNull()) =
   server.protocol.client.framesPending.add PendingFrame(
     frameId: server.currId,
     frame: jsonToFrame create(
@@ -139,11 +145,7 @@ proc error(
       ).JsonNode
   )
 
-proc error(
-    server: Server,
-    errorCode: ErrorCode,
-    message: string
-  ) =
+proc error(server: Server, errorCode: ErrorCode, message: string) =
   server.protocol.client.framesPending.add PendingFrame(
     frameId: server.currId,
     frame: jsonToFrame create(
@@ -155,11 +157,7 @@ proc error(
       ).JsonNode
   )
 
-proc respond(
-    server: Server,
-    id: int,
-    data: JsonNode
-  ) =
+proc respond(server: Server, id: int, data: JsonNode) =
   server.protocol.client.framesPending.add PendingFrame(
     frameId: server.currId,
     frame: jsonToFrame create(
@@ -171,11 +169,7 @@ proc respond(
     ).JsonNode
   )
 
-proc respond(
-    server: Server,
-    request: RequestMessage,
-    data: JsonNode
-  ) =
+proc respond(server: Server, request: RequestMessage, data: JsonNode) =
   server.respond(parseId(request["id"]), data)
 
 proc serverCapabilities(): ServerCapabilities =
@@ -287,6 +281,10 @@ proc processRequestUninitialized(server: var Server, message: JsonNode) =
           message,
           create(InitializeResult, serverCaps).JsonNode
         )
+
+        # do the initializing work
+        discard existsOrCreateDir(server.storage)
+
         return
 
       server.error(
@@ -323,6 +321,29 @@ proc processRequestInitializing(server: var Server, message: JsonNode) =
     return
   debugLog "Unhandled message while uninitilized: " & repr(message)
 
+template textDocumentRequest(server, message, kind, name, body) {.dirty.} =
+  if message["params"].isSome:
+    let name = message["params"].unsafeGet
+    whenValid(name, kind):
+      let
+        fileuri = name["textDocument"]["uri"].getStr
+        filestash = server.storage / (hash(fileuri).toHex & ".nim" )
+      debugLog "Got request for URI: ", fileuri, " copied to " & filestash
+      let
+        rawLine = name["position"]["line"].getInt
+        rawChar = name["position"]["character"].getInt
+      body
+
+template textDocumentNotification(server, message, kind, name, body) {.dirty.} =
+  if message["params"].isSome:
+    let name = message["params"].unsafeGet
+    whenValid(name, kind):
+      if name["textDocument"]{"languageId"}.getStr("nim") == "nim":
+        let
+          fileuri = name["textDocument"]["uri"].getStr
+          filestash = server.storage / (hash(fileuri).toHex & ".nim" )
+        body
+
 proc processRequestInitialized(server: Server, message: JsonNode) =
   ## only call this method if the server's lspState is initialized
 
@@ -335,7 +356,6 @@ proc processRequestInitialized(server: Server, message: JsonNode) =
       var params = message["params"].get(newJNull())
       whenValid(params, DidChangeConfigurationParams):
         var settings = params["settings"]{"nim"}
-
         debugLog "Got settings: " & repr(settings)
     of "textDocument/didOpen":
       message["params"].filter((p) => p.isValid(DidOpenTextDocumentParams))
@@ -451,6 +471,7 @@ when isMainModule:
         nimpath: NimPath(getCurrentCompilerExe().parentDir.parentDir),
         version: Version("0.0.1")
       ),
+      storage: getTempDir() / "nimlanguageserver",
       protocol: Protocol(
         stage: uninitialized,
         capabilities: {},
