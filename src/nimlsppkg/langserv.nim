@@ -342,6 +342,21 @@ proc processRequestInitialized(server: Server, message: JsonNode) =
         .map((p) => DidOpenTextDocumentParams(p))
         .map((p) => TextDocumentItem(p["textDocument"])["uri"].getStr)
         .map(proc(uri: string) = debugLog "uri: " & uri)
+    of "textDocument/didChange":
+      message["params"].filter((p) => p.isValid(DidChangeTextDocumentParams))
+        .map((p) => DidChangeTextDocumentParams(p))
+        .map((p) => VersionedTextDocumentIdentifier(p["textDocument"])["uri"].getStr)
+        .map(proc(uri: string) = debugLog "uri: " & uri)
+    of "textDocument/didClose":
+      message["params"].filter((p) => p.isValid(DidCloseTextDocumentParams))
+        .map((p) => DidCloseTextDocumentParams(p))
+        .map((p) => TextDocumentIdentifier(p["textDocument"])["uri"].getStr)
+        .map(proc(uri: string) = debugLog "uri: " & uri)
+    of "textDocument/didSave":
+      message["params"].filter((p) => p.isValid(DidSaveTextDocumentParams))
+        .map((p) => DidSaveTextDocumentParams(p))
+        .map((p) => TextDocumentIdentifier(p["textDocument"])["uri"].getStr)
+        .map(proc(uri: string) = debugLog "uri: " & uri)
     return
 
   debugLog "Got message that wasn't handled: " & repr(message)

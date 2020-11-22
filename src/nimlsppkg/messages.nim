@@ -64,6 +64,13 @@ jsonSchema:
     "range": Range
     newText: string
 
+  TextDocumentIdentifier:
+    uri: string # Note that this is not checked
+
+  VersionedTextDocumentIdentifier extends TextDocumentIdentifier:
+    version: int or float or nil
+    languageId?: string # SublimeLSP adds this field erroneously
+
   TextDocumentEdit:
     textDocument: VersionedTextDocumentIdentifier
     edits: TextEdit[]
@@ -72,18 +79,11 @@ jsonSchema:
     changes?: any # This is a uri(string) to TextEdit[] mapping
     documentChanges?: TextDocumentEdit[]
 
-  TextDocumentIdentifier:
-    uri: string # Note that this is not checked
-
   TextDocumentItem:
     uri: string
     languageId: string
     version: int or float
     text: string
-
-  VersionedTextDocumentIdentifier extends TextDocumentIdentifier:
-    version: int or float or nil
-    languageId?: string # SublimeLSP adds this field erroneously
 
   TextDocumentPositionParams:
     textDocument: TextDocumentIdentifier
