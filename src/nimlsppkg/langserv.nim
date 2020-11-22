@@ -1,5 +1,6 @@
 from os import getCurrentCompilerExe, parentDir, `/`, getConfigDir,
-               expandTilde, getEnv, existsEnv, existsOrCreateDir
+               expandTilde, getEnv, existsEnv, existsOrCreateDir,
+               ReadEnvEffect
 from uri import Uri
 from tables import OrderedTableRef, `[]=`, pairs, newOrderedTable, len
 from strutils import `%`, join, parseInt, toHex
@@ -100,12 +101,18 @@ type
       ## id we're currently processing, acts as a context
 
 proc getTempDir*(): string {.tags: [ReadEnvEffect, ReadIOEffect].} =
-  let default = when defined(tempDir):
+  ## Temp dir handling in nim standard library is out of date
+  ##
+  ## references for linux handling:
+  ## * https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+  ## * https://maex.me/2019/12/the-power-of-the-xdg-base-directory-specification/
+  result = when defined(tempDir):
       const tempDir {.strdefine.}: string = "/tmp"
       tempDir
     elif defined(windows): string(getEnv("TEMP"))
     elif defined(macos): string(getEnv("TMPDIR", "/tmp"))
     else: getEnv("XDG_CACHE_HOME", expandTilde("~/.cache")).string
+
 
 proc nextId(s: var Server): Id =
   inc s.idSeq
