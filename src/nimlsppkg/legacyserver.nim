@@ -1,11 +1,13 @@
 import baseprotocol, utfmapping, suggestlib
-include messages
 import streams
 import tables
 import strutils
 import os
+import osproc
 import hashes
 import uri
+
+include messages
 
 const
   storage = getTempDir() / "nimlsp"
@@ -156,10 +158,9 @@ type Certainty = enum
   Cfg,
   Nimble
 
-proc getProjectFile(file: string): string =
-  result = file.decodeUrl
-  when defined(windows):
-    result.removePrefix "/"   # ugly fix to "/C:/foo/bar" paths from "file:///C:/foo/bar"
+proc getProjectFile(fileUri: string): string =
+  let file = fileUri.decodeUrl
+  result = file
   let (dir, _, _) = result.splitFile()
   var
     path = dir
@@ -176,9 +177,20 @@ proc getProjectFile(file: string): string =
       fileExists(path / current.addFileExt(".nims"))) and certainty <= Cfg:
       result = path / current.addFileExt(".nim")
       certainty = Cfg
-    if fileExists(path / current.addFileExt(".nimble")) and certainty <= Nimble:
-      # Read the .nimble file and find the project file
-      discard
+    if certainty <= Nimble:
+      for nimble in walkFiles(path / "*.nimble"):
+        let info = execProcess("nimble dump " & nimble)
+        var sourceDir, name: string
+        for line in info.splitLines:
+          if line.startsWith("srcDir"):
+            sourceDir = path / line[(1 + line.find '"')..^2]
+          if line.startsWith("name"):
+            name = line[(1 + line.find '"')..^2]
+        let projectFile = sourceDir / (name & ".nim")
+        if sourceDir.len != 0 and name.len != 0 and
+            file.isRelativeTo(sourceDir) and fileExists(projectFile):
+          result = projectFile
+          certainty = Nimble
     path = dir
 
 template getNimsuggest(fileuri: string): Nimsuggest =
