@@ -1,9 +1,11 @@
 from os import getCurrentCompilerExe, parentDir, `/`, getConfigDir,
                expandTilde, getEnv, existsEnv, existsOrCreateDir,
-               ReadEnvEffect
-from uri import Uri
+               ReadEnvEffect, splitFile, fileExists, addFileExt, walkFiles,
+               isRelativeTo
+from osproc import execProcess
+from uri import Uri, decodeUrl
 from tables import OrderedTableRef, `[]=`, pairs, newOrderedTable, len
-from strutils import `%`, join, parseInt, toHex
+from strutils import `%`, join, parseInt, toHex, startsWith, splitLines
 from sugar import `=>`
 from hashes import hash
 
@@ -91,9 +93,13 @@ type
   ServerStartParams* = object
     nimpath*: NimPath
     version*: ServerVersion
+  ServerMode* {.pure.} = enum
+    smSingleFile, smFolder
 
   Server = object
     startParams*: ServerStartParams
+    mode*: ServerMode
+    rootUri*: string
     protocol*: Protocol
     storage*: string
     idSeq*: IdSeq
@@ -113,6 +119,65 @@ proc getTempDir*(): string {.tags: [ReadEnvEffect, ReadIOEffect].} =
     elif defined(macos): string(getEnv("TMPDIR", "/tmp"))
     else: getEnv("XDG_CACHE_HOME", expandTilde("~/.cache")).string
 
+proc pathToUri(path: string): string =
+  # This is a modified copy of encodeUrl in the uri module. This doesn't encode
+  # the / character, meaning a full file path can be passed in without breaking
+  # it.
+  result = newStringOfCap(path.len + path.len shr 2) # assume 12% non-alnum-chars
+  for c in path:
+    case c
+    # https://tools.ietf.org/html/rfc3986#section-2.3
+    of 'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', '/': add(result, c)
+    else:
+      add(result, '%')
+      add(result, toHex(ord(c), 2))
+
+type Certainty {.pure.} = enum
+  None,
+  Folder,
+  Cfg,
+  Nimble
+
+proc getProjectFile(s: Server, fileUri: string): string =
+  let
+    file = fileUri.decodeUrl
+    endPath = if s.mode == smFolder and fileUri.startsWith(s.rootUri):
+        s.rootUri.decodeUrl
+      else:
+        "/"
+    (dir, _, _) = result.splitFile()
+  result = file
+  var
+    path = dir
+    certainty = Certainty.None
+  while path.len > 0 and path != endPath:
+    let
+      (dir, fname, ext) = path.splitFile()
+      current = fname & ext
+    if fileExists(path / current.addFileExt(".nim")) and
+      certainty <= Certainty.Folder:
+        result = path / current.addFileExt(".nim")
+        certainty = Certainty.Folder
+    if fileExists(path / current.addFileExt(".nim")) and
+      (fileExists(path / current.addFileExt(".nim.cfg")) or
+      fileExists(path / current.addFileExt(".nims"))) and certainty <= Cfg:
+      result = path / current.addFileExt(".nim")
+      certainty = Cfg
+    if certainty <= Nimble:
+      for nimble in walkFiles(path / "*.nimble"):
+        let info = execProcess("nimble dump " & nimble)
+        var sourceDir, name: string
+        for line in info.splitLines:
+          if line.startsWith("srcDir"):
+            sourceDir = path / line[(1 + line.find '"')..^2]
+          if line.startsWith("name"):
+            name = line[(1 + line.find '"')..^2]
+        let projectFile = sourceDir / (name & ".nim")
+        if sourceDir.len != 0 and name.len != 0 and
+            file.isRelativeTo(sourceDir) and fileExists(projectFile):
+          result = projectFile
+          certainty = Nimble
+    path = dir
 
 proc nextId(s: var Server): Id =
   inc s.idSeq
@@ -258,27 +323,41 @@ proc processRequestUninitialized(server: var Server, message: JsonNode) =
             debugLog ("Client name: " & c["name"].getStr & " version: " &
               c["version"].get(nil).getStr "unknown")
 
+        let root = params["rootUri"].getStr(
+          params["rootPath"].filter((r) => r != nil)
+            .map((r) => pathToUri(r.getStr()))
+            .get(""))
+        if root == "":
+          server.mode = smSingleFile
+          debugLog("Server in single file mode")
+        else:
+          server.mode = smFolder
+          server.rootUri = root
+          debugLog("Server in folder mode, root set to: ", root)
+
         # Negotiate Capabilities - start
         let caps = params["capabilities"]
         whenValid(caps, ClientCapabilities) do:
           server.protocol.client.capabilities = caps
-          if caps["workspace"].map((j) => WorkspaceClientCapabilities(j))
-            .map((w) => w["workspaceFolders"])
-            .flatten()
-            .map((w) => w.getBool)
-            .get(false):
-              incl(server.protocol.capabilities, capWorkspaceFolders)
+          # TODO - support multiple workspace folders
+          # if caps["workspace"].map((j) => WorkspaceClientCapabilities(j))
+          #   .map((w) => w["workspaceFolders"])
+          #   .flatten()
+          #   .map((w) => w.getBool)
+          #   .get(false):
+          #     incl(server.protocol.capabilities, capWorkspaceFolders)
 
         var serverCaps = serverCapabilities()
         debugLog "Client capabilities " & $server.protocol.capabilities
-        if capWorkspaceFolders in server.protocol.capabilities:
-          serverCaps.JsonNode["workspace"] =
-            create(WorkspaceCapability,
-              workspaceFolders = some(create(WorkspaceFoldersServerCapabilities,
-                supported = some(true),
-                changeNotifications = some(true)
-              ))
-            ).JsonNode
+        # TODO - support multiple workspace folders
+        # if capWorkspaceFolders in server.protocol.capabilities:
+        #   serverCaps.JsonNode["workspace"] =
+        #     create(WorkspaceCapability,
+        #       workspaceFolders = some(create(WorkspaceFoldersServerCapabilities,
+        #         supported = some(true),
+        #         changeNotifications = some(true)
+        #       ))
+        #     ).JsonNode
         # Negotiate Capabilities - end
 
         server.protocol.stage = initializing
@@ -399,7 +478,9 @@ proc processRequest(server: var Server): Progress =
     let
       client = server.protocol.client
       frame = client.framesReceived.pop.frame
-    debugLog "Got frame:\n" & frame
+    debugLog "Got frame:\n" & (if frame.len > 320:
+        frame.substr(0, 320) & "... [truncated after 320 characters]"
+      else: frame)
     let message = frame.parseJson
 
     case server.protocol.stage
@@ -457,7 +538,7 @@ when isMainModule:
   from streams import newStringStream
   from os import `/`, parentDir
 
-  # assume this was built into and run from ./out project dir
+  # assume this was built in and run from ./out project dir
   const
     src = parentDir(parentDir(currentSourcePath()))
     srcNimlspPkg = src / "nimlsppkg"
@@ -478,6 +559,7 @@ when isMainModule:
         nimpath: NimPath(getCurrentCompilerExe().parentDir.parentDir),
         version: Version("0.0.1")
       ),
+      mode: smSingleFile,
       storage: getTempDir() / "nimlanguageserver",
       protocol: Protocol(
         stage: uninitialized,
@@ -490,6 +572,8 @@ when isMainModule:
       )
     )
 
+  debugLog "Temp Directory: ", server.storage
+
   clientMsgs.open(100)
   msgsToClient.open(100)
   clientMsgs.send Msg(
@@ -501,7 +585,7 @@ when isMainModule:
         processId = 1337,
         clientInfo = none(ClientInfo),
         rootPath = none(string),
-        rootUri = "file:///tmp",
+        rootUri = "file://" & parentDir(src),
         initializationOptions = none(JsonNode),
         capabilities = create(ClientCapabilities,
           workspace = some(create(WorkspaceClientCapabilities,
