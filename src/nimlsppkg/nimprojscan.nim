@@ -1,16 +1,17 @@
 from uri import Uri, parseUri, encodeUrl, decodeUrl, `/`, `$`
-from strutils import toHex, startsWith, `%`, replace, find, split, join
+from strutils import toHex, startsWith, `%`, replace, find, split, join, strip
 from sequtils import mapIt, filterIt
 from os import `/`, normalizedPath, walkDir, PathComponent, splitFile, findExe,
                isAbsolute
 from osproc import execCmdEx
 from json import parseJson, `{}`, `getStr`
+from streams import newStringStream, lines
+from parseutils import parseIdent
 
 type
   NimbleTask = object
-    nimbleUri*: Uri
     name*: string
-    help*: string
+    description*: string
   NimbleFile = object
     uri*: Uri
     name*: string
@@ -38,6 +39,7 @@ type
     existingNimble: Uri
   NimbleExeNotFound* = object of CatchableError
   NimbleDumpFailed* = object of CatchableError
+  NimbleTasksFailed* = object of CatchableError
 
 proc authority(uri: Uri): string =
   let
@@ -102,9 +104,9 @@ proc pathToUri(absolutePath: string): Uri =
         ## filterIt removes '/' prefix, assume absolute path and re-add later
         ## each part of the path, but not the slashes need to be URL encoded
       (user, pass, host, port) = rawAuthority.split("@", 1).mapIt(case it.len
-          of 0: ("", "")
           of 1: ("", it[0])
           of 2: (it[0], it[1])
+          else: ("", "")
         ).mapIt(block:
           let
             userparts = it[0].split(':', 1)
@@ -180,16 +182,35 @@ proc doFind(uri: Uri): owned DirFind =
       raise newException(NimbleExeNotFound, "Did not find nimble executable")
     var
       d = execCmdEx(nimbleExe & " dump --json", workingDir = uri.uriToPath)
+      t = execCmdEx(nimbleExe & " tasks", workingDir = uri.uriToPath)
       j = d.output.parseJson
+      tasksOut = newStringStream(t.output)
     
     if d.exitCode != 0:
       raise newException(NimbleDumpFailed,
         "Nimble dump exited with code: " & $d.exitCode)
+    if t.exitCode != 0:
+      raise newException(NimbleTasksFailed,
+        "Nimble tasks exited with code: " & $t.exitCode)
 
     result.nimble.name = j{"name"}.getStr
     result.nimble.srcDir = (path / j{"srcDir"}.getStr).pathToUri
     result.nimble.binDir = (path / j{"binDir"}.getStr).pathToUri
     result.nimble.backend = j{"backend"}.getStr
+
+    for l in tasksOut.lines():
+      let
+        possibleTask = l.strip(trailing = false).split("    ", maxsplit = 1)
+        (name, desc) = case possibleTask.len
+          of 2: (possibleTask[0].parseIdent(), possibleTask[1].strip)
+          else: ("", "")
+        isTask = name.len > 0
+      
+      # Because the format isn't reliable, descriptions could be multi-line
+      if isTask:
+        result.nimble.tasks.add(NimbleTask(name: name, description: desc))
+      else:
+        result.nimble.tasks[result.nimble.tasks.len - 1].description &= l
 
 when isMainModule:
   from os import parentDir
@@ -200,15 +221,13 @@ when isMainModule:
 
   var
     find = doFind(rootUri)
-    nimbleDump = execCmdEx("nimble")
 
   echo $find
   
   if find.isNimbleProject:
     echo "It's a nimble project"
   
-  for s in ["/test/butts", "file:///test/butts", "/", "/home/foo/bar/.."]:
+  for s in ["/test/butts", "file:///test/butts", "/", "/home/foo/../bar/"]:
     let u = parseUri(s)
-    echo "Parsed out scheme: $1, hostname: $2, authority: $3, path: $4" %
-      [u.scheme, u.hostname, u.authority, u.path]
-    echo "fsPath: " & u.uriToPath
+    echo "Uri: scheme: $1, hostname: $2, authority: $3, path: $4; fsPath: $5" %
+      [u.scheme, u.hostname, u.authority, u.path, u.uriToPath]
