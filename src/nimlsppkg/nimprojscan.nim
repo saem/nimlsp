@@ -21,6 +21,8 @@ type
     backend*: string
     tasks*: seq[NimbleTask]
     # add other nimble relevant things here
+  ConfigNimsFile = object
+    uri*: Uri
   NimsFile = object
     uri*: Uri
   NimFile = object
@@ -29,16 +31,19 @@ type
     uri*: Uri
   NimCfgFile = object
     uri*: Uri
-  DirFind = object
+  DirScan = object of RootObj
+    ## TODO - remove inheritance in next refactor
     uri*: Uri
     nimble*: Option[NimbleFile]
     cfg*: Option[CfgFile]
+    configNims*: Option[ConfigNimsFile]
     nimcfgs*: seq[NimCfgFile]
     nimscripts*: seq[NimsFile]
     nims*: seq[NimFile]
     dirs*: seq[Uri]
     ignoredDirs*: seq[Uri]
     otherFiles*: seq[Uri]
+  DirFind = object of DirScan
     nimbleExe*: string
   UriParseError* = object of Defect
     uri: Uri
@@ -143,8 +148,10 @@ proc `$`(f: DirFind): string =
   result = ""
   result.add "uri: " & $f.uri & "\n"
   result.add "nimble file: " & $f.nimble & "\n"
+  result.add "cfg file: " & $f.cfg & "\n"
+  result.add ".nim.cfg files: " & $f.nimcfgs & "\n"
+  result.add "config.nims files: " & $f.configNims & "\n"
   result.add "nims files: " & $f.nimscripts & "\n"
-  result.add "cfg files: " & $f.cfg & "\n"
   result.add "nim files: " & $f.nims & "\n"
   result.add "directories: " & $f.dirs & "\n"
   result.add "other files: " & $f.otherFiles & "\n"
@@ -177,7 +184,9 @@ proc doFind(uri: Uri): owned DirFind =
           e.uri = fUri
           e.existingNimble = result.nimble.get.uri
           raise e
-      of ".nims": result.nimscripts.add(NimsFile(uri: fUri))
+      of ".nims":
+        if name == "config": result.configNims = some(ConfigNimsFile(uri: fUri))
+        else: result.nimscripts.add(NimsFile(uri: fUri))
       of ".nim": result.nims.add(NimFile(uri: fUri))
       of ".cfg":
         if name == "nim": result.cfg = some(CfgFile(uri: fUri))
