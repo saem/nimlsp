@@ -1,5 +1,5 @@
 from uri import Uri, parseUri, encodeUrl, decodeUrl, `/`, `$`
-from strutils import toHex, startsWith, `%`, replace, find, split
+from strutils import toHex, startsWith, `%`, replace, find, split, join
 from sequtils import mapIt, filterIt
 from os import `/`, normalizedPath, walkDir, PathComponent, splitFile, findExe
 from osproc import execCmdEx
@@ -71,26 +71,20 @@ proc pathToUri(absolutePath: string): Uri =
   ## Based on vscode uri module: https://github.com/microsoft/vscode-uri/blob/master/src/index.ts#L752
   ## 
   ## Assumes absolute paths
-  ## 
-  ## Old Docs:
-  ## This is a modified copy of encodeUrl in the uri module. This doesn't encode
-  ## the / character, meaning a full file absolutePath can be passed in without breaking
-  ## it.
-  # let
-  #   schemeLen = scheme.len + 3 # 3 is for ://
-  #   assumedNonAlnumChars = absolutePath.len shr 2 # assume 12% non-alnum-chars
-  # var str = newStringOfCap(schemeLen + absolutePath.len + assumedNonAlnumChars)
-  # str.add scheme
-  # str.add "://"
-  # for c in absolutePath:
-  #   case c
-  #   # https://tools.ietf.org/html/rfc3986#section-2.3
-  #   of 'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', '/': add(str, c)
-  #   else:
-  #     add(str, '%')
-  #     add(str, toHex(ord(c), 2))
 
   when defined(windows):
+    # in windows we need to handle UNC
+    # also black slashes ('\') get normalized to forward slashes ('/')
+    #
+    # Windows bits to know:
+    # - C:\ and the rest are all absolute paths
+    # - with msysgit/cygwin/etc... we might get slashes -- not fully handled
+    #
+    # UNC things to know:
+    # - UNC start with "\\" eg: "\\share\c$\foo"
+    # - 'share' part above is the authority
+    # - authority is as basically: user:pass@share:port
+    # - except for the port the rest need to be url encoded individually
     let
       fwdSlashPath = absolutePath.normalizedPath().replace("\\", "/")
       isUnc = fwdSlashPath.startsWith("//")
@@ -101,6 +95,8 @@ proc pathToUri(absolutePath: string): Uri =
                 elif fsPath.startsWith('/'): fsPath
                 else: "/" & fsPath
       path = rawPath.split('/').filterIt(it.len > 0).mapIt(it.encodeUrl())
+        ## filterIt removes '/' prefix, assume absolute path and re-add later
+        ## each part of the path, but not the slashes need to be URL encoded
       (user, pass, host, port) = rawAuthority.split("@", 1).mapIt(case it.len
           of 0: ("", "")
           of 1: ("", it[0])
@@ -115,43 +111,19 @@ proc pathToUri(absolutePath: string): Uri =
             port = if hostparts.len > 1: hostparts[1] : ""
           (user.encodeUrl, pass.encodeUrl, host.encodeUrl, port)
         )
+    result.username = user
+    result.password = pass
+    result.hostname = host
+    result.port = port
   else:
-    fsPath = absolutePath.normalizedPath
-    path = fsPath.split("/")
-  result = initUri()
-  uri.scheme = "file"
-  uri.username = user
-  uri.password = pass
-  uri.hostname = host
-  uri.port = port
-  uri.path = "/" & path.join("/")
-
-  let
-    fsPath = when defined(windows): absolutePath.replace("\\", "/")
-             else: absolutePath
-    hasUnc = fsPath.startsWith("//")
-    authority = if fsPath.startsWith("//"):
+    let
+      fsPath = absolutePath.normalizedPath
+      path = fsPath.split("/").filterIt(it.len > 0).mapIt(it.encodeUrl())
+        ## filterIt removes '/' prefix, assume absolute path and re-add later
+        ## each part of the path, but not the slashes need to be URL encoded
   
-  let p = when defined(windows):
-      if path[1] == ':' and (path[0] in {'a'..'z'} or path[0] in {'A'..'Z'}):
-        "/" & path.replace("\\", "/")
-      else:
-        path.replace("\\", "/")
-    else:
-      path
-  
-  result = parseUri(p)
-  
-  result.path = if p.startsWith("//"):
-      let
-        i = p.find('/', 2)
-        pathPart = p[i .. ^1]
-      if i == -1 or pathPart == "": "/"
-      else: pathPart
-    else:
-      p
-
   result.scheme = "file"
+  result.path = "/" & path.join("/") # force absolute path assumption
 
 proc `$`(f: DirFind): string =
   result = ""
