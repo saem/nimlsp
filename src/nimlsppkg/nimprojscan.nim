@@ -1,7 +1,8 @@
 from uri import Uri, parseUri, encodeUrl, decodeUrl, `/`, `$`
 from strutils import toHex, startsWith, `%`, replace, find, split, join
 from sequtils import mapIt, filterIt
-from os import `/`, normalizedPath, walkDir, PathComponent, splitFile, findExe
+from os import `/`, normalizedPath, walkDir, PathComponent, splitFile, findExe,
+               isAbsolute
 from osproc import execCmdEx
 from json import parseJson, `{}`, `getStr`
 
@@ -49,23 +50,26 @@ proc authority(uri: Uri): string =
 
 proc uriToPath(uri: Uri): string =
   ## Convert an RFC 8089 file URI to a native, platform-specific, absolute path.
-  #let startIdx = when defined(windows): 8 else: 7
-  #normalizedPath(uri[startIdx..^1])
-  if uri.scheme != "file":
+  ## Accepts 'file' scheme, assumes if none set, or raises
+  ## hostname is only allowed if on windows for UNC support
+  if uri.scheme notIn ["file", ""]:
     var e = newException(UriParseError,
       "Invalid scheme: $1, only \"file\" supported" % [uri.scheme])
     e.uri = uri
     raise e
-  if uri.hostname != "":
-    var e = newException(UriParseError, 
-      "Invalid hostname: $1, only empty hostname supported" % [uri.hostname])
-    e.uri = uri
-    raise e
-  result = (
-    when defined(windows): uri.path[1..^1]
-    else: uri.path).decodeUrl
+    
   when defined(windows):
-    result = result.replace("/", "\\")
+    result = if uri.hostname != "":
+      "\\\\" & uri.authority.decodeUrl & uri.path.decodeUrl.replace('/', '\\')
+      else: uri.path[1..^1].decodeUrl.replace('/', '\\')
+  else:
+    ## only windows has UNC so hostnames are allowed, but not elsehwere
+    if uri.hostname != "":
+      var e = newException(UriParseError, 
+        "Invalid hostname: $1, only empty hostname supported" % [uri.hostname])
+      e.uri = uri
+      raise e
+    result = uri.path.decodeUrl.normalizedPath
 
 proc pathToUri(absolutePath: string): Uri =
   ## Based on vscode uri module: https://github.com/microsoft/vscode-uri/blob/master/src/index.ts#L752
@@ -82,7 +86,7 @@ proc pathToUri(absolutePath: string): Uri =
     #
     # UNC things to know:
     # - UNC start with "\\" eg: "\\share\c$\foo"
-    # - 'share' part above is the authority
+    # - 'share' part above is the authority, the rest is the path
     # - authority is as basically: user:pass@share:port
     # - except for the port the rest need to be url encoded individually
     let
@@ -203,7 +207,8 @@ when isMainModule:
   if find.isNimbleProject:
     echo "It's a nimble project"
   
-  for s in ["/test/butts", "file:///test/butts"]:
+  for s in ["/test/butts", "file:///test/butts", "/", "/home/foo/bar/.."]:
     let u = parseUri(s)
     echo "Parsed out scheme: $1, hostname: $2, authority: $3, path: $4" %
       [u.scheme, u.hostname, u.authority, u.path]
+    echo "fsPath: " & u.uriToPath
