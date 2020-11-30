@@ -7,6 +7,7 @@ from osproc import execCmdEx
 from json import parseJson, `{}`, `getStr`
 from streams import newStringStream, lines
 from parseutils import parseIdent
+from options import Option, some, none, isSome, isNone, get
 
 type
   NimbleTask = object
@@ -20,14 +21,21 @@ type
     backend*: string
     tasks*: seq[NimbleTask]
     # add other nimble relevant things here
-  FindKind {.pure.} = enum
-    fkNimble, fkLoL # LoL - because it could be anything :D
+  NimsFile = object
+    uri*: Uri
+  NimFile = object
+    uri*: Uri
+  CfgFile = object
+    uri*: Uri
+  NimCfgFile = object
+    uri*: Uri
   DirFind = object
     uri*: Uri
-    nimble*: NimbleFile
-    cfgs*: seq[Uri]
-    nimscripts*: seq[Uri]
-    nims*: seq[Uri]
+    nimble*: Option[NimbleFile]
+    cfg*: Option[CfgFile]
+    nimcfgs*: seq[NimCfgFile]
+    nimscripts*: seq[NimsFile]
+    nims*: seq[NimFile]
     dirs*: seq[Uri]
     ignoredDirs*: seq[Uri]
     otherFiles*: seq[Uri]
@@ -136,14 +144,14 @@ proc `$`(f: DirFind): string =
   result.add "uri: " & $f.uri & "\n"
   result.add "nimble file: " & $f.nimble & "\n"
   result.add "nims files: " & $f.nimscripts & "\n"
-  result.add "cfg files: " & $f.cfgs & "\n"
+  result.add "cfg files: " & $f.cfg & "\n"
   result.add "nim files: " & $f.nims & "\n"
   result.add "directories: " & $f.dirs & "\n"
   result.add "other files: " & $f.otherFiles & "\n"
   result.add "ignored directories: " & $f.ignoredDirs & "\n"
 
 proc isNimbleProject(f: DirFind): bool =
-  result = f.nimble.uri.path.len > 0
+  result = f.nimble.isSome
 
 proc doFind(uri: Uri): owned DirFind =
   result = DirFind(uri: uri, nimbleExe: findExe("nimble"))
@@ -160,18 +168,20 @@ proc doFind(uri: Uri): owned DirFind =
     of pcFile, pcLinkToFile:
       case ext
       of ".nimble":
-        if result.nimble.uri.path.len == 0:
-          result.nimble.uri = fUri
+        if result.nimble.isNone:
+          result.nimble = some(NimbleFile(uri: fUri))
         else:
           var e = newException(MoreThanOneNimble,
             "Have $1, also got $2, max one per folder" %
-              [$result.nimble.uri, $fUri])
+              [$result.nimble.get.uri, $fUri])
           e.uri = fUri
-          e.existingNimble = result.nimble.uri
+          e.existingNimble = result.nimble.get.uri
           raise e
-      of ".nims": result.nimscripts.add(fUri)
-      of ".nim": result.nims.add(fUri)
-      of ".cfg": result.cfgs.add(fUri)
+      of ".nims": result.nimscripts.add(NimsFile(uri: fUri))
+      of ".nim": result.nims.add(NimFile(uri: fUri))
+      of ".cfg":
+        if name == "nim": result.cfg = some(CfgFile(uri: fUri))
+        else: result.nimCfgs.add(NimCfgFile(uri: fUri))
       else: result.otherFiles.add(fUri)
   
   if result.isNimbleProject:
@@ -186,6 +196,8 @@ proc doFind(uri: Uri): owned DirFind =
       j = d.output.parseJson
       tasksOut = newStringStream(t.output)
     
+    template nimble(): NimbleFile = result.nimble.get()
+    
     if d.exitCode != 0:
       raise newException(NimbleDumpFailed,
         "Nimble dump exited with code: " & $d.exitCode)
@@ -193,10 +205,10 @@ proc doFind(uri: Uri): owned DirFind =
       raise newException(NimbleTasksFailed,
         "Nimble tasks exited with code: " & $t.exitCode)
 
-    result.nimble.name = j{"name"}.getStr
-    result.nimble.srcDir = (path / j{"srcDir"}.getStr).pathToUri
-    result.nimble.binDir = (path / j{"binDir"}.getStr).pathToUri
-    result.nimble.backend = j{"backend"}.getStr
+    nimble.name = j{"name"}.getStr
+    nimble.srcDir = (path / j{"srcDir"}.getStr).pathToUri
+    nimble.binDir = (path / j{"binDir"}.getStr).pathToUri
+    nimble.backend = j{"backend"}.getStr
 
     for l in tasksOut.lines():
       let
@@ -208,9 +220,9 @@ proc doFind(uri: Uri): owned DirFind =
       
       # Because the format isn't reliable, descriptions could be multi-line
       if isTask:
-        result.nimble.tasks.add(NimbleTask(name: name, description: desc))
+        nimble.tasks.add(NimbleTask(name: name, description: desc))
       else:
-        result.nimble.tasks[result.nimble.tasks.len - 1].description &= l
+        nimble.tasks[nimble.tasks.len - 1].description &= l
 
 when isMainModule:
   from os import parentDir
