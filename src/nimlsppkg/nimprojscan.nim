@@ -43,8 +43,9 @@ type
     dirs*: seq[Uri]
     ignoredDirs*: seq[Uri]
     otherFiles*: seq[Uri]
-  DirFind = object of DirScan
+  DirFind = object
     nimbleExe*: string
+    startDir*: DirScan
   UriParseError* = object of Defect
     uri: Uri
   MoreThanOneNimble* = object of CatchableError
@@ -145,23 +146,24 @@ proc pathToUri(absolutePath: string): Uri =
   result.path = "/" & path.join("/") # force absolute path assumption
 
 proc `$`(f: DirFind): string =
+  let d = f.startDir
   result = ""
-  result.add "uri: " & $f.uri & "\n"
-  result.add "nimble file: " & $f.nimble & "\n"
-  result.add "cfg file: " & $f.cfg & "\n"
-  result.add ".nim.cfg files: " & $f.nimcfgs & "\n"
-  result.add "config.nims files: " & $f.configNims & "\n"
-  result.add "nims files: " & $f.nimscripts & "\n"
-  result.add "nim files: " & $f.nims & "\n"
-  result.add "directories: " & $f.dirs & "\n"
-  result.add "other files: " & $f.otherFiles & "\n"
-  result.add "ignored directories: " & $f.ignoredDirs & "\n"
+  result.add "uri: " & $d.uri & "\n"
+  result.add "nimble file: " & $d.nimble & "\n"
+  result.add "cfg file: " & $d.cfg & "\n"
+  result.add ".nim.cfg files: " & $d.nimcfgs & "\n"
+  result.add "config.nims files: " & $d.configNims & "\n"
+  result.add "nims files: " & $d.nimscripts & "\n"
+  result.add "nim files: " & $d.nims & "\n"
+  result.add "directories: " & $d.dirs & "\n"
+  result.add "other files: " & $d.otherFiles & "\n"
+  result.add "ignored directories: " & $d.ignoredDirs & "\n"
 
-proc isNimbleProject(f: DirFind): bool =
-  result = f.nimble.isSome
+proc isNimbleProject(s: DirScan): bool =
+  result = s.nimble.isSome
 
-proc doFind(uri: Uri): owned DirFind =
-  result = DirFind(uri: uri, nimbleExe: findExe("nimble"))
+proc scanDirImpl(uri: Uri, nimbleExe: string): DirScan =
+  result.uri = uri
   for f in walkDir(result.uri.uriToPath):
     let
       fUri = f.path.pathToUri
@@ -194,9 +196,7 @@ proc doFind(uri: Uri): owned DirFind =
       else: result.otherFiles.add(fUri)
   
   if result.isNimbleProject:
-    let
-      nimbleExe = result.nimbleExe
-      path = result.uri.uriToPath
+    let path = result.uri.uriToPath
     if nimbleExe == "":
       raise newException(NimbleExeNotFound, "Did not find nimble executable")
     var
@@ -233,6 +233,11 @@ proc doFind(uri: Uri): owned DirFind =
       else:
         nimble.tasks[nimble.tasks.len - 1].description &= l
 
+proc doFind(uri: Uri): owned DirFind =
+  result = DirFind(nimbleExe: findExe("nimble"))
+
+  result.startDir = scanDirImpl(uri, result.nimbleExe)
+
 when isMainModule:
   from os import parentDir
   from uri import isAbsolute, initUri
@@ -245,7 +250,7 @@ when isMainModule:
 
   echo $find
   
-  if find.isNimbleProject:
+  if find.startDir.isNimbleProject:
     echo "It's a nimble project"
   
   for s in ["/test/butts", "file:///test/butts", "/", "/home/foo/../bar/"]:
