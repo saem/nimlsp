@@ -162,7 +162,7 @@ proc `$`(f: DirFind): string =
 proc isNimbleProject(s: DirScan): bool =
   result = s.nimble.isSome
 
-proc scanDirImpl(uri: Uri, nimbleExe: string): DirScan =
+proc scanDir(uri: Uri): DirScan =
   result.uri = uri
   for f in walkDir(result.uri.uriToPath):
     let
@@ -241,7 +241,7 @@ proc scanNimble(dir: var DirScan, nimbleExe: string) =
 proc doFind(uri: Uri): owned DirFind =
   result = DirFind(nimbleExe: findExe("nimble"))
 
-  result.startDir = scanDirImpl(uri, result.nimbleExe)
+  result.startDir = scanDir(uri)
   result.startDir.scanNimble(result.nimbleExe)
 
 when isMainModule:
