@@ -196,6 +196,10 @@ proc scanDir(uri: Uri): DirScan =
       else: result.otherFiles.add(fUri)
 
 proc scanNimble(dir: var DirScan, nimbleExe: string) =
+  ## Separately scan nimble information after directory walk.
+  ##
+  ## Also required to allow handling of `nimbledeps` for local dependencies:
+  ## https://github.com/nim-lang/nimble#nimbles-folder-structure-and-packages
   if not dir.isNimbleProject:
     return
 
@@ -227,6 +231,9 @@ proc scanNimble(dir: var DirScan, nimbleExe: string) =
   for l in tasksOut.lines():
     let
       possibleTask = l.strip(trailing = false).split("    ", maxsplit = 1)
+      # About the odd split on four spaces:
+      # nimble uses 8 spaces, but using four as a "precaution", see:
+      # https://github.com/nim-lang/nimble/blob/e658bb5048172a0080725a16c93ac0961714b353/src/nimblepkg/nimscriptapi.nim#L184
       (name, desc) = case possibleTask.len
         of 2: (possibleTask[0].parseIdent(), possibleTask[1].strip)
         else: ("", "")
