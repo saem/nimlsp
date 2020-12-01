@@ -194,49 +194,55 @@ proc scanDirImpl(uri: Uri, nimbleExe: string): DirScan =
         if name == "nim": result.cfg = some(CfgFile(uri: fUri))
         else: result.nimCfgs.add(NimCfgFile(uri: fUri))
       else: result.otherFiles.add(fUri)
+
+proc scanNimble(dir: var DirScan, nimbleExe: string) =
+  if not dir.isNimbleProject:
+    return
+
+  if nimbleExe == "":
+    raise newException(NimbleExeNotFound, "Did not find nimble executable")
+
+  let
+    uri = dir.uri
+    path = dir.uri.uriToPath
+    d = execCmdEx(nimbleExe & " dump --json", workingDir = uri.uriToPath)
+    t = execCmdEx(nimbleExe & " tasks", workingDir = uri.uriToPath)
+    j = d.output.parseJson
+    tasksOut = newStringStream(t.output)
   
-  if result.isNimbleProject:
-    let path = result.uri.uriToPath
-    if nimbleExe == "":
-      raise newException(NimbleExeNotFound, "Did not find nimble executable")
-    var
-      d = execCmdEx(nimbleExe & " dump --json", workingDir = uri.uriToPath)
-      t = execCmdEx(nimbleExe & " tasks", workingDir = uri.uriToPath)
-      j = d.output.parseJson
-      tasksOut = newStringStream(t.output)
-    
-    template nimble(): NimbleFile = result.nimble.get()
-    
-    if d.exitCode != 0:
-      raise newException(NimbleDumpFailed,
-        "Nimble dump exited with code: " & $d.exitCode)
-    if t.exitCode != 0:
-      raise newException(NimbleTasksFailed,
-        "Nimble tasks exited with code: " & $t.exitCode)
+  template nimble(): NimbleFile = dir.nimble.get()
+  
+  if d.exitCode != 0:
+    raise newException(NimbleDumpFailed,
+      "Nimble dump exited with code: " & $d.exitCode)
+  if t.exitCode != 0:
+    raise newException(NimbleTasksFailed,
+      "Nimble tasks exited with code: " & $t.exitCode)
 
-    nimble.name = j{"name"}.getStr
-    nimble.srcDir = (path / j{"srcDir"}.getStr).pathToUri
-    nimble.binDir = (path / j{"binDir"}.getStr).pathToUri
-    nimble.backend = j{"backend"}.getStr
+  nimble.name = j{"name"}.getStr
+  nimble.srcDir = (path / j{"srcDir"}.getStr).pathToUri
+  nimble.binDir = (path / j{"binDir"}.getStr).pathToUri
+  nimble.backend = j{"backend"}.getStr
 
-    for l in tasksOut.lines():
-      let
-        possibleTask = l.strip(trailing = false).split("    ", maxsplit = 1)
-        (name, desc) = case possibleTask.len
-          of 2: (possibleTask[0].parseIdent(), possibleTask[1].strip)
-          else: ("", "")
-        isTask = name.len > 0
-      
-      # Because the format isn't reliable, descriptions could be multi-line
-      if isTask:
-        nimble.tasks.add(NimbleTask(name: name, description: desc))
-      else:
-        nimble.tasks[nimble.tasks.len - 1].description &= l
+  for l in tasksOut.lines():
+    let
+      possibleTask = l.strip(trailing = false).split("    ", maxsplit = 1)
+      (name, desc) = case possibleTask.len
+        of 2: (possibleTask[0].parseIdent(), possibleTask[1].strip)
+        else: ("", "")
+      isTask = name.len > 0
+    
+    # Because the format isn't reliable, descriptions could be multi-line
+    if isTask:
+      nimble.tasks.add(NimbleTask(name: name, description: desc))
+    else:
+      nimble.tasks[nimble.tasks.len - 1].description &= l
 
 proc doFind(uri: Uri): owned DirFind =
   result = DirFind(nimbleExe: findExe("nimble"))
 
   result.startDir = scanDirImpl(uri, result.nimbleExe)
+  result.startDir.scanNimble(result.nimbleExe)
 
 when isMainModule:
   from os import parentDir
