@@ -31,7 +31,7 @@ type
     uri*: Uri
   NimCfgFile = object
     uri*: Uri
-  DirScan = object of RootObj
+  DirScan = object
     ## TODO - remove inheritance in next refactor
     uri*: Uri
     nimble*: Option[NimbleFile]
@@ -42,6 +42,7 @@ type
     nims*: seq[NimFile]
     dirs*: seq[Uri]
     ignoredDirs*: seq[Uri]
+    nimbledeps*: Option[Uri]
     otherFiles*: seq[Uri]
   DirFind = object
     nimbleExe*: string
@@ -172,6 +173,10 @@ proc scanDir(uri: Uri): DirScan =
     of pcDir, pcLinkToDir:
       if name.startsWith("."):
         result.ignoredDirs.add(fUri)
+      if name == "nimbledeps":
+        # if there is no sibling nimble file at the end move this to dirs
+        # see: https://github.com/nim-lang/nimble#nimbles-folder-structure-and-packages
+        result.nimbledeps = some(fUri)
       else:
         result.dirs.add(fUri)
     of pcFile, pcLinkToFile:
@@ -194,6 +199,10 @@ proc scanDir(uri: Uri): DirScan =
         if name == "nim": result.cfg = some(CfgFile(uri: fUri))
         else: result.nimCfgs.add(NimCfgFile(uri: fUri))
       else: result.otherFiles.add(fUri)
+    
+  if result.nimble.isNone and result.nimbledeps.isSome:
+    # even if not a nimble project could be a source dir or misconfigured
+    result.dirs.add(result.nimbledeps.get)
 
 proc scanNimble(dir: var DirScan, nimbleExe: string) =
   ## Separately scan nimble information after directory walk.
