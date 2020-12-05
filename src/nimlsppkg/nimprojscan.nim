@@ -8,6 +8,8 @@ from json import parseJson, `{}`, `getStr`
 from streams import newStringStream, lines
 from parseutils import parseIdent
 from options import Option, some, none, isSome, isNone, get
+from tables import OrderedTable, `[]`, `[]=`
+from hashes import hash, Hash
 
 type
   NimbleTask = object
@@ -32,7 +34,6 @@ type
   NimCfgFile = object
     uri*: Uri
   DirScan = object
-    ## TODO - remove inheritance in next refactor
     uri*: Uri
     nimble*: Option[NimbleFile]
     cfg*: Option[CfgFile]
@@ -46,7 +47,9 @@ type
     otherFiles*: seq[Uri]
   DirFind = object
     nimbleExe*: string
-    startDir*: DirScan
+    start*: Uri
+    scanned*: OrderedTable[Uri, DirScan]
+
   UriParseError* = object of Defect
     uri: Uri
   MoreThanOneNimble* = object of CatchableError
@@ -55,6 +58,10 @@ type
   NimbleExeNotFound* = object of CatchableError
   NimbleDumpFailed* = object of CatchableError
   NimbleTasksFailed* = object of CatchableError
+
+proc hash(u: Uri): Hash = hash($u)
+template startDir*(f: DirFind): DirScan = f.scanned[f.start]
+template `startDir=`*(f: DirFind, d: DirScan) = f.scanned[f.start] = d
 
 proc authority(uri: Uri): string =
   let
@@ -149,7 +156,8 @@ proc pathToUri(absolutePath: string): Uri =
 proc `$`(f: DirFind): string =
   let d = f.startDir
   result = ""
-  result.add "uri: " & $d.uri & "\n"
+  result.add "find uri: " & $f.start & "\n"
+  result.add "first dir uri: " & $d.uri & "\n"
   result.add "nimble file: " & $d.nimble & "\n"
   result.add "cfg file: " & $d.cfg & "\n"
   result.add ".nim.cfg files: " & $d.nimcfgs & "\n"
@@ -255,7 +263,7 @@ proc scanNimble(dir: var DirScan, nimbleExe: string) =
       nimble.tasks[nimble.tasks.len - 1].description &= l
 
 proc doFind(uri: Uri): owned DirFind =
-  result = DirFind(nimbleExe: findExe("nimble"))
+  result = DirFind(start: uri, nimbleExe: findExe("nimble"))
 
   result.startDir = scanDir(uri)
   result.startDir.scanNimble(result.nimbleExe)
