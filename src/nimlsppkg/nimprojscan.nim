@@ -153,21 +153,6 @@ proc pathToUri(absolutePath: string): Uri =
   result.scheme = "file"
   result.path = "/" & path.join("/") # force absolute path assumption
 
-proc `$`(f: DirFind): string =
-  let d = f.startDir
-  result = ""
-  result.add "find uri: " & $f.start & "\n"
-  result.add "first dir uri: " & $d.uri & "\n"
-  result.add "nimble file: " & $d.nimble & "\n"
-  result.add "cfg file: " & $d.cfg & "\n"
-  result.add ".nim.cfg files: " & $d.nimcfgs & "\n"
-  result.add "config.nims files: " & $d.configNims & "\n"
-  result.add "nims files: " & $d.nimscripts & "\n"
-  result.add "nim files: " & $d.nims & "\n"
-  result.add "directories: " & $d.dirs & "\n"
-  result.add "other files: " & $d.otherFiles & "\n"
-  result.add "ignored directories: " & $d.ignoredDirs & "\n"
-
 proc isNimbleProject(s: DirScan): bool =
   result = s.nimble.isSome
 
@@ -181,7 +166,7 @@ proc scanDir(uri: Uri): DirScan =
     of pcDir, pcLinkToDir:
       if name.startsWith("."):
         result.ignoredDirs.add(fUri)
-      if name == "nimbledeps":
+      elif name == "nimbledeps":
         # if there is no sibling nimble file at the end move this to dirs
         # see: https://github.com/nim-lang/nimble#nimbles-folder-structure-and-packages
         result.nimbledeps = some(fUri)
@@ -262,26 +247,39 @@ proc scanNimble(dir: var DirScan, nimbleExe: string) =
     else:
       nimble.tasks[nimble.tasks.len - 1].description &= l
 
+proc scanRecursive(f: var DirFind, dir: DirScan = f.startDir): void =
+  for d in f.startDir.dirs:
+    f.scanned[d] = scanDir(d)
+    f.scanned[d].scanNimble(f.nimbleExe)
+
 proc doFind(uri: Uri): owned DirFind =
   result = DirFind(start: uri, nimbleExe: findExe("nimble"))
 
   result.startDir = scanDir(uri)
   result.startDir.scanNimble(result.nimbleExe)
+  result.scanRecursive
 
 when isMainModule:
   from os import parentDir
   from uri import isAbsolute, initUri
+  from tables import pairs
+  from json import `%`, pretty, newJObject, JsonNode, `[]=`
 
   const
     rootUri = parentDir(parentDir(parentDir(currentSourcePath()))).pathToUri
 
   var
     find = doFind(rootUri)
-
-  echo $find
   
-  if find.startDir.isNimbleProject:
-    echo "It's a nimble project"
+  proc `%`(u: Uri): JsonNode = % $u
+  proc `%`(t: OrderedTable[Uri, DirScan]): JsonNode =
+    result = newJObject()
+    for key, val in t.pairs: result.fields[$key] = %val
+  proc `%`(d: DirScan): JsonNode =
+    result = %d
+    result["isNimbleProject"] = %true
+
+  echo pretty(%find)
   
   for s in ["/test/butts", "file:///test/butts", "/", "/home/foo/../bar/"]:
     let u = parseUri(s)
