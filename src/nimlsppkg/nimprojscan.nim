@@ -2,16 +2,27 @@ from uri import Uri, parseUri, encodeUrl, decodeUrl, `/`, `$`
 from strutils import toHex, startsWith, `%`, replace, find, split, join, strip
 from sequtils import mapIt, filterIt
 from os import `/`, normalizedPath, walkDir, PathComponent, splitFile, findExe,
-               isAbsolute
+               isAbsolute, addFileExt, lastPathPart, parentDir
 from osproc import execCmdEx
 from json import parseJson, `{}`, `getStr`
 from streams import newStringStream, lines
 from parseutils import parseIdent
-from options import Option, some, none, isSome, isNone, get
-from tables import OrderedTable, `[]`, `[]=`
+from options import Option, some, none, isSome, isNone, get, map
+from tables import OrderedTable, `[]`, `[]=`, hasKey
 from hashes import hash, Hash
+from sugar import `=>`
 
 type
+  ConfigNimsFile = object
+    uri*: Uri
+  NimsFile = object
+    uri*: Uri
+  NimFile = object
+    uri*: Uri
+  CfgFile = object
+    uri*: Uri
+  NimCfgFile = object
+    uri*: Uri
   NimbleTask = object
     name*: string
     description*: string
@@ -23,19 +34,9 @@ type
     backend*: string
     tasks*: seq[NimbleTask]
     # add other nimble relevant things here
-  ConfigNimsFile = object
-    uri*: Uri
-  NimsFile = object
-    uri*: Uri
-  NimFile = object
-    uri*: Uri
-  CfgFile = object
-    uri*: Uri
-  NimCfgFile = object
-    uri*: Uri
   DirScan = object
     uri*: Uri
-    nimble*: Option[NimbleFile]
+    nimble*: Option[Uri]
     cfg*: Option[CfgFile]
     configNims*: Option[ConfigNimsFile]
     nimcfgs*: seq[NimCfgFile]
@@ -45,10 +46,23 @@ type
     ignoredDirs*: seq[Uri]
     nimbledeps*: Option[Uri]
     otherFiles*: seq[Uri]
+  ProjectKind {.pure.} = enum
+    pkNimble, pkCfg, pkFolder, pkIndividual
+  FoundProject = object
+    projectFile*: Uri
+      ## project file for nimsuggest, and the default for nimble projects
+    case kind*: ProjectKind:
+      of pkNimble: nimble*: NimbleFile
+      of pkCfg:
+        nims*: bool
+        cfg*: bool
+      of pkFolder, pkIndividual: discard
   DirFind = object
     nimbleExe*: string
     start*: Uri
     scanned*: OrderedTable[Uri, DirScan]
+    scannedNimble*: OrderedTable[Uri, NimbleFile]
+    projects*: seq[FoundProject]
 
   UriParseError* = object of Defect
     uri: Uri
@@ -176,13 +190,13 @@ proc scanDir(uri: Uri): DirScan =
       case ext
       of ".nimble":
         if result.nimble.isNone:
-          result.nimble = some(NimbleFile(uri: fUri))
+          result.nimble = some(fUri)
         else:
           var e = newException(MoreThanOneNimble,
             "Have $1, also got $2, max one per folder" %
-              [$result.nimble.get.uri, $fUri])
+              [$result.nimble.get, $fUri])
           e.uri = fUri
-          e.existingNimble = result.nimble.get.uri
+          e.existingNimble = result.nimble.get
           raise e
       of ".nims":
         if name == "config": result.configNims = some(ConfigNimsFile(uri: fUri))
@@ -197,26 +211,21 @@ proc scanDir(uri: Uri): DirScan =
     # even if not a nimble project could be a source dir or misconfigured
     result.dirs.add(result.nimbledeps.get)
 
-proc scanNimble(dir: var DirScan, nimbleExe: string) =
+proc scanNimble(nimbleUri: Uri, nimbleExe: string): owned NimbleFile =
   ## Separately scan nimble information after directory walk.
   ##
   ## Also required to allow handling of `nimbledeps` for local dependencies:
   ## https://github.com/nim-lang/nimble#nimbles-folder-structure-and-packages
-  if not dir.isNimbleProject:
-    return
 
   if nimbleExe == "":
     raise newException(NimbleExeNotFound, "Did not find nimble executable")
 
   let
-    uri = dir.uri
-    path = dir.uri.uriToPath
-    d = execCmdEx(nimbleExe & " dump --json", workingDir = uri.uriToPath)
-    t = execCmdEx(nimbleExe & " tasks", workingDir = uri.uriToPath)
+    path = nimbleUri.uriToPath.parentDir
+    d = execCmdEx(nimbleExe & " dump --json", workingDir = path)
+    t = execCmdEx(nimbleExe & " tasks", workingDir = path)
     j = d.output.parseJson
     tasksOut = newStringStream(t.output)
-  
-  template nimble(): NimbleFile = dir.nimble.get()
   
   if d.exitCode != 0:
     raise newException(NimbleDumpFailed,
@@ -225,10 +234,12 @@ proc scanNimble(dir: var DirScan, nimbleExe: string) =
     raise newException(NimbleTasksFailed,
       "Nimble tasks exited with code: " & $t.exitCode)
 
-  nimble.name = j{"name"}.getStr
-  nimble.srcDir = (path / j{"srcDir"}.getStr).pathToUri
-  nimble.binDir = (path / j{"binDir"}.getStr).pathToUri
-  nimble.backend = j{"backend"}.getStr
+  result.uri = nimbleUri
+
+  result.name = j{"name"}.getStr
+  result.srcDir = (path / j{"srcDir"}.getStr).pathToUri
+  result.binDir = (path / j{"binDir"}.getStr).pathToUri
+  result.backend = j{"backend"}.getStr
 
   for l in tasksOut.lines():
     let
@@ -243,21 +254,53 @@ proc scanNimble(dir: var DirScan, nimbleExe: string) =
     
     # Because the format isn't reliable, descriptions could be multi-line
     if isTask:
-      nimble.tasks.add(NimbleTask(name: name, description: desc))
+      result.tasks.add(NimbleTask(name: name, description: desc))
     else:
-      nimble.tasks[nimble.tasks.len - 1].description &= l
+      result.tasks[result.tasks.len - 1].description &= l
 
-proc scanRecursive(f: var DirFind, dir: DirScan = f.startDir): void =
-  for d in f.startDir.dirs:
-    f.scanned[d] = scanDir(d)
-    f.scanned[d].scanNimble(f.nimbleExe)
+# proc scanRecursive(f: var DirFind, dir: DirScan = f.startDir): void =
+#   for d in f.startDir.dirs:
+#     f.scanned[d] = scanDir(d)
+#     f.scanned[d].scanNimble(f.nimbleExe)
+
+proc getProjects(f: DirFind): seq[FoundProject] =
+  if f.startDir.isNimbleProject:
+    let
+      startDir = f.startDir
+      dirName = startDir.uri.uriToPath.lastPathPart
+      nimble = f.scannedNimble[startDir.nimble.get]
+      name = nimble.name
+      srcDir = f.scanned[nimble.srcDir]
+      guessProjFilePath = srcDir.uri.uriToPath.parentDir / name.addFileExt("nim")
+      guessProjFile = guessProjFilePath.pathToUri
+      # guessProjFileExists = startDir.nims.anyIt(it.uri == guessProjFile)
+      otherProjFiles = f.startDir.nims.filterIt(it.uri != guessProjFile)
+    
+    # if guessProjFileExists:
+    #   result.add(FoundProject(projectFile: guessProjFile))
+
+      
+    # f.projects.add(FoundProject(projectFile: f.startDir.nimble.get))
 
 proc doFind(uri: Uri): owned DirFind =
   result = DirFind(start: uri, nimbleExe: findExe("nimble"))
 
   result.startDir = scanDir(uri)
-  result.startDir.scanNimble(result.nimbleExe)
-  result.scanRecursive
+  let
+    nimbleExe = result.nimbleExe
+    nimble = result.startDir.nimble.map(it => scanNimble(it, nimbleExe))
+    srcDirUri = nimble.map(it => it.srcDir)
+    isSrcDirScanned = if srcDirUri.isSome: result.scanned.hasKey(srcDirUri.get) else: false
+    srcDir = if isSrcDirScanned: some(result.scanned[srcDirUri.get])
+             else: srcDirUri.map(scanDir)
+  if nimble.isSome:
+    result.scannedNimble[nimble.get.uri] = nimble.get
+    if not isSrcDirScanned:
+      result.scanned[srcDir.get.uri] = srcDir.get
+    
+  result.projects = result.getProjects
+  
+  # result.scanRecursive
 
 when isMainModule:
   from os import parentDir
@@ -275,13 +318,17 @@ when isMainModule:
   proc `%`(t: OrderedTable[Uri, DirScan]): JsonNode =
     result = newJObject()
     for key, val in t.pairs: result.fields[$key] = %val
+  proc `%`(t: OrderedTable[Uri, NimbleFile]): JsonNode =
+    result = newJObject()
+    for key, val in t.pairs: result.fields[$key] = %val
   proc `%`(d: DirScan): JsonNode =
     result = %d
     result["isNimbleProject"] = %true
 
   echo pretty(%find)
   
-  for s in ["/test/butts", "file:///test/butts", "/", "/home/foo/../bar/"]:
-    let u = parseUri(s)
-    echo "Uri: scheme: $1, hostname: $2, authority: $3, path: $4; fsPath: $5" %
-      [u.scheme, u.hostname, u.authority, u.path, u.uriToPath]
+  # tests for path Uri conversion
+  # for s in ["/test/butts", "file:///test/butts", "/", "/home/foo/../bar/"]:
+  #   let u = parseUri(s)
+  #   echo "Uri: scheme: $1, hostname: $2, authority: $3, path: $4; fsPath: $5" %
+  #     [u.scheme, u.hostname, u.authority, u.path, u.uriToPath]
