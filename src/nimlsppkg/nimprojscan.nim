@@ -1,8 +1,8 @@
 from uri import Uri, parseUri, encodeUrl, decodeUrl, `/`, `$`
 from strutils import toHex, startsWith, `%`, replace, find, split, join, strip
-from sequtils import mapIt, filterIt
+from sequtils import mapIt, filterIt, anyIt
 from os import `/`, normalizedPath, walkDir, PathComponent, splitFile, findExe,
-               isAbsolute, addFileExt, lastPathPart, parentDir
+               isAbsolute, addFileExt, lastPathPart, parentDir, changeFileExt
 from osproc import execCmdEx
 from json import parseJson, `{}`, `getStr`
 from streams import newStringStream, lines
@@ -15,25 +15,14 @@ from sugar import `=>`
 type
   ConfigNimsFile = object
     uri*: Uri
-  NimsFile = object
-    uri*: Uri
   NimFile = object
+    uri*: Uri
+  NimsFile = object
     uri*: Uri
   CfgFile = object
     uri*: Uri
   NimCfgFile = object
     uri*: Uri
-  NimbleTask = object
-    name*: string
-    description*: string
-  NimbleFile = object
-    uri*: Uri
-    name*: string
-    srcDir*: Uri
-    binDir*: Uri
-    backend*: string
-    tasks*: seq[NimbleTask]
-    # add other nimble relevant things here
   DirScan = object
     uri*: Uri
     nimble*: Option[Uri]
@@ -46,23 +35,45 @@ type
     ignoredDirs*: seq[Uri]
     nimbledeps*: Option[Uri]
     otherFiles*: seq[Uri]
+  NimbleTask = object
+    name*: string
+    description*: string
+  NimbleFile = object
+    uri*: Uri
+    name*: string
+    srcDir*: Uri
+    binDir*: Uri
+    backend*: string
+    tasks*: seq[NimbleTask]
+    # add other nimble relevant things here
   ProjectKind {.pure.} = enum
-    pkNimble, pkCfg, pkFolder, pkIndividual
-  FoundProject = object
+    pkNim, pkNims
+  ProjectContext {.pure.} = enum
+    pcDir, pcNimble
+  Project = object
     projectFile*: Uri
-      ## project file for nimsuggest, and the default for nimble projects
+      ## project file for nimsuggest
+    projectNimCfg*: bool
+      ## projectfile.nim.cfg exists    
     case kind*: ProjectKind:
-      of pkNimble: nimble*: NimbleFile
-      of pkCfg:
-        nims*: bool
-        cfg*: bool
-      of pkFolder, pkIndividual: discard
+      of pkNim: projectNims*: bool
+        ## projectfile.nims exists
+      of pkNims: discard
+    case context*: ProjectContext:
+      of pcNimble: nimble*: Uri
+      of ProjectContext.pcDir: dir*: Uri
+        ## directory where context is located
   DirFind = object
     nimbleExe*: string
     start*: Uri
     scanned*: OrderedTable[Uri, DirScan]
     scannedNimble*: OrderedTable[Uri, NimbleFile]
-    projects*: seq[FoundProject]
+    scannedNim*: OrderedTable[Uri, NimFile]
+    scannedNims*: OrderedTable[Uri, NimsFile]
+    scannedConfigNims*: OrderedTable[Uri, ConfigNimsFile]
+    scannedCfg*: OrderedTable[Uri, CfgFile]
+    scannedNimCfg*: OrderedTable[Uri, NimCfgFile]
+    projects*: seq[Project]
 
   UriParseError* = object of Defect
     uri: Uri
@@ -211,6 +222,20 @@ proc scanDir(uri: Uri): DirScan =
     # even if not a nimble project could be a source dir or misconfigured
     result.dirs.add(result.nimbledeps.get)
 
+proc scanDir(f: var DirFind, uri: Uri): DirScan =
+  result = scanDir(uri)
+
+  for n in result.nims:
+    f.scannedNim[n.uri] = n
+  for n in result.nimscripts:
+    f.scannedNims[n.uri] = n
+  for n in result.nimcfgs:
+    f.scannedNimCfg[n.uri] = n
+  if result.cfg.isSome:
+    f.scannedCfg[result.cfg.get.uri] = result.cfg.get
+  if result.configNims.isSome:
+    f.scannedConfigNims[result.configNims.get.uri] = result.configNims.get
+
 proc scanNimble(nimbleUri: Uri, nimbleExe: string): owned NimbleFile =
   ## Separately scan nimble information after directory walk.
   ##
@@ -258,12 +283,7 @@ proc scanNimble(nimbleUri: Uri, nimbleExe: string): owned NimbleFile =
     else:
       result.tasks[result.tasks.len - 1].description &= l
 
-# proc scanRecursive(f: var DirFind, dir: DirScan = f.startDir): void =
-#   for d in f.startDir.dirs:
-#     f.scanned[d] = scanDir(d)
-#     f.scanned[d].scanNimble(f.nimbleExe)
-
-proc getProjects(f: DirFind): seq[FoundProject] =
+proc getProjects(f: DirFind): seq[Project] =
   if f.startDir.isNimbleProject:
     let
       startDir = f.startDir
@@ -273,34 +293,39 @@ proc getProjects(f: DirFind): seq[FoundProject] =
       srcDir = f.scanned[nimble.srcDir]
       guessProjFilePath = srcDir.uri.uriToPath.parentDir / name.addFileExt("nim")
       guessProjFile = guessProjFilePath.pathToUri
-      # guessProjFileExists = startDir.nims.anyIt(it.uri == guessProjFile)
-      otherProjFiles = f.startDir.nims.filterIt(it.uri != guessProjFile)
+      guessProjFileExists = startDir.nims.anyIt(it.uri == guessProjFile)
+      otherProjFiles = f.startDir.nims.filterIt(it.uri != guessProjFile).mapIt(it.uri)
+      projFiles = if guessProjFileExists: @[guessProjFile] & otherProjFiles
+                  else: otherProjFiles
     
-    # if guessProjFileExists:
-    #   result.add(FoundProject(projectFile: guessProjFile))
-
-      
-    # f.projects.add(FoundProject(projectFile: f.startDir.nimble.get))
+    for n in srcDir.nims:
+      result.add(Project(projectFile: n.uri, kind: pkNim, context: pcNimble,
+                         nimble: nimble.uri))
+    for n in srcDir.nimscripts:
+      let possibleNim = n.uri.uriToPath.changeFileExt("nim").pathToUri
+      if f.scannedNim.hasKey(possibleNim): continue
+      result.add(Project(projectFile: n.uri, kind: pkNims, context: pcNimble,
+                         nimble: nimble.uri))
 
 proc doFind(uri: Uri): owned DirFind =
   result = DirFind(start: uri, nimbleExe: findExe("nimble"))
 
-  result.startDir = scanDir(uri)
+  result.startDir = result.scanDir(uri)
+
+  # Nimble handling
   let
     nimbleExe = result.nimbleExe
     nimble = result.startDir.nimble.map(it => scanNimble(it, nimbleExe))
     srcDirUri = nimble.map(it => it.srcDir)
     isSrcDirScanned = if srcDirUri.isSome: result.scanned.hasKey(srcDirUri.get) else: false
     srcDir = if isSrcDirScanned: some(result.scanned[srcDirUri.get])
-             else: srcDirUri.map(scanDir)
+             else: some(result.scanDir(srcDirUri.get))
   if nimble.isSome:
     result.scannedNimble[nimble.get.uri] = nimble.get
     if not isSrcDirScanned:
       result.scanned[srcDir.get.uri] = srcDir.get
     
   result.projects = result.getProjects
-  
-  # result.scanRecursive
 
 when isMainModule:
   from os import parentDir
@@ -319,6 +344,21 @@ when isMainModule:
     result = newJObject()
     for key, val in t.pairs: result.fields[$key] = %val
   proc `%`(t: OrderedTable[Uri, NimbleFile]): JsonNode =
+    result = newJObject()
+    for key, val in t.pairs: result.fields[$key] = %val
+  proc `%`(t: OrderedTable[Uri, NimFile]): JsonNode =
+    result = newJObject()
+    for key, val in t.pairs: result.fields[$key] = %val
+  proc `%`(t: OrderedTable[Uri, NimsFile]): JsonNode =
+    result = newJObject()
+    for key, val in t.pairs: result.fields[$key] = %val
+  proc `%`(t: OrderedTable[Uri, ConfigNimsFile]): JsonNode =
+    result = newJObject()
+    for key, val in t.pairs: result.fields[$key] = %val
+  proc `%`(t: OrderedTable[Uri, CfgFile]): JsonNode =
+    result = newJObject()
+    for key, val in t.pairs: result.fields[$key] = %val
+  proc `%`(t: OrderedTable[Uri, NimCfgFile]): JsonNode =
     result = newJObject()
     for key, val in t.pairs: result.fields[$key] = %val
   proc `%`(d: DirScan): JsonNode =
